@@ -1157,7 +1157,7 @@ research-wing/
 ### Research Wing
 
 ```text
-[████████████████████░░░░] Core Framework
+[████████████░░░░░░░░░░░░] Core Framework
 ```
 
 Implemented:
@@ -1197,7 +1197,7 @@ In progress:
 ### Bitcoin Trading Bot
 
 ```text
-[████████████████░░░░░░░░] Paper Trading System
+[███████████████████████░] Paper Trading System
 ```
 
 The bot provides a simpler end-to-end implementation of:
