@@ -456,6 +456,8 @@ BacktestResult ──┐
 Research Report ─┘
 ```
 
+![](image.png)
+
 Visualization does not need to know how the underlying simulation works.
 
 ---
@@ -841,6 +843,14 @@ Classic Strategies
        ├── Mean Reversion
        └── Breakout
 ```
+
+Handles very wacky strategies like a signal based on Ice-cream-Production over 6 months average:
+![](image-1.png)
+
+Which surprisingly results in profits between the first week of December 2024.
+check analsis/experiments/weird_run.py for details.
+
+> Note: This is under ideal situations. Changing the timeframe/ adding fees or slippage may shift the results. Have fun.
 
 ## Machine Learning
 
