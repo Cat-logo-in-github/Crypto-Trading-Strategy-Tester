@@ -1,23 +1,56 @@
 """
 analysis.engine.models.closed_trade
 
-Completed trade analysis model.
+Research representation of a completed position lifecycle.
 
-A ClosedTrade represents a completed round-trip
+Trade
+-----
+A Trade represents one execution.
+
+ClosedTrade
+-----------
+A ClosedTrade represents one completed portion of a position
+lifecycle.
+
+Examples
+--------
+
+Single entry / single exit:
+
+    BUY 1.0
+        ↓
+    SELL 1.0
+        ↓
+    ClosedTrade(quantity=1.0)
+
+
+Single entry / multiple exits:
+
+    BUY 1.0
+        ↓
+    SELL 0.25
+        ↓
+    ClosedTrade(quantity=0.25)
+
+    SELL 0.25
+        ↓
+    ClosedTrade(quantity=0.25)
+
+    SELL 0.50
+        ↓
+    ClosedTrade(quantity=0.50)
+
+The three ClosedTrades together represent the complete
 position lifecycle.
 
-Unlike Trade:
+This object is immutable and belongs to the research layer.
 
-Trade:
-    - represents a single execution event
-    - immutable exchange record
+It does not:
 
-ClosedTrade:
-    - represents a completed position outcome
-    - composed from entry and exit executions
-    - used for research analytics
-
-ClosedTrades are immutable historical records.
+- modify Portfolio
+- execute trades
+- calculate position state
+- reconstruct trade history
 """
 
 from __future__ import annotations
@@ -25,36 +58,28 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from analysis.engine.trade import (
-    Trade,
-    TradeSide,
-)
+from analysis.engine.trade import Trade, TradeSide
 
 
 @dataclass(frozen=True, slots=True)
 class ClosedTrade:
     """
-    Completed position lifecycle.
+    Completed portion of a position lifecycle.
 
-    Example:
+    A ClosedTrade connects:
 
-        Entry Trade
-              |
-              |
-        Exit Trade
-              |
-              v
-        ClosedTrade
+        entry execution
+              ↓
+        exit execution
+              ↓
+        realized outcome
 
+    Quantity represents the amount closed by this particular
+    exit execution.
 
-    Used for:
-
-    - win/loss analysis
-    - expectancy
-    - profit factor
-    - holding time analysis
-    - strategy diagnostics
-    - visualization
+    Therefore a single entry may legitimately produce
+    multiple ClosedTrade objects when the position is exited
+    in pieces.
     """
 
     id: str
@@ -69,194 +94,206 @@ class ClosedTrade:
 
     gross_pnl: float
 
-    fees: float
+    fees: float = 0.0
 
-
-    # -------------------------------------------------
+    # ---------------------------------------------------------
     # Validation
-    # -------------------------------------------------
+    # ---------------------------------------------------------
 
     def __post_init__(self) -> None:
-        """
-        Validate completed trade.
-        """
+        """Validate immutable closed-trade state."""
 
         if self.entry_trade.symbol != self.symbol:
             raise ValueError(
                 "Entry trade symbol mismatch."
             )
 
-
         if self.exit_trade.symbol != self.symbol:
             raise ValueError(
                 "Exit trade symbol mismatch."
             )
 
+        if self.entry_trade.side is self.exit_trade.side:
+            raise ValueError(
+                "Entry and exit trades must have opposite sides."
+            )
 
         if self.quantity <= 0:
             raise ValueError(
                 "Closed trade quantity must be positive."
             )
 
+        if self.quantity > self.entry_trade.quantity:
+            raise ValueError(
+                "Closed quantity cannot exceed entry trade quantity."
+            )
 
         if self.fees < 0:
             raise ValueError(
                 "Fees cannot be negative."
             )
 
-
-
-    # -------------------------------------------------
+    # ---------------------------------------------------------
     # Direction
-    # -------------------------------------------------
+    # ---------------------------------------------------------
 
     @property
     def is_long(self) -> bool:
         """
-        Whether the completed trade was long.
+        Whether this lifecycle portion originated from a BUY.
         """
 
         return (
-            self.entry_trade.side
-            is TradeSide.BUY
+            self.entry_trade.side is TradeSide.BUY
         )
-
 
     @property
     def is_short(self) -> bool:
         """
-        Whether the completed trade was short.
+        Whether this lifecycle portion originated from a SELL.
         """
 
         return (
-            self.entry_trade.side
-            is TradeSide.SELL
+            self.entry_trade.side is TradeSide.SELL
         )
 
+    @property
+    def direction(self) -> str:
+        """Human-readable position direction."""
 
+        return (
+            "LONG"
+            if self.is_long
+            else "SHORT"
+        )
 
-    # -------------------------------------------------
+    # ---------------------------------------------------------
     # Execution information
-    # -------------------------------------------------
+    # ---------------------------------------------------------
 
     @property
-    def entry_time(self) -> datetime | int:
+    def entry_time(self) -> datetime:
+        """Timestamp of the opening execution."""
+
         return self.entry_trade.timestamp
 
-
     @property
-    def exit_time(self) -> datetime | int:
-        return self.exit_trade.timestamp
+    def exit_time(self) -> datetime:
+        """Timestamp of the closing execution."""
 
+        return self.exit_trade.timestamp
 
     @property
     def entry_price(self) -> float:
-        return self.entry_trade.price
+        """Average entry price for this lifecycle."""
 
+        return self.entry_trade.price
 
     @property
     def exit_price(self) -> float:
+        """Exit execution price."""
+
         return self.exit_trade.price
 
+    # ---------------------------------------------------------
+    # Holding period
+    # ---------------------------------------------------------
 
     @property
     def holding_period(self) -> timedelta:
         """
-        Time position was held.
+        Time between entry and exit.
 
-        Supports:
-        - datetime timestamps
-        - integer millisecond timestamps
-
-        Internal analytics always receive timedelta.
+        The engine uses datetime timestamps, so the research
+        layer exposes a normalized timedelta.
         """
 
-        start = self.entry_time
-        end = self.exit_time
-
-
-        if isinstance(start, datetime) and isinstance(end, datetime):
-
-            return end - start
-
-
-        if isinstance(start, int) and isinstance(end, int):
-
-            return timedelta(
-                milliseconds=end - start
-            )
-
-
-        raise TypeError(
-            "Unsupported timestamp type for holding period."
+        return (
+            self.exit_time
+            - self.entry_time
         )
 
-
-    # -------------------------------------------------
+    # ---------------------------------------------------------
     # Performance
-    # -------------------------------------------------
+    # ---------------------------------------------------------
 
     @property
     def net_pnl(self) -> float:
         """
-        Realized PnL after execution costs.
+        Realized P&L after fees.
         """
 
         return (
             self.gross_pnl
-            -
-            self.fees
+            - self.fees
         )
 
+    @property
+    def entry_value(self) -> float:
+        """
+        Gross capital represented by this closed portion.
+        """
+
+        return (
+            self.quantity
+            * self.entry_price
+        )
+
+    @property
+    def exit_value(self) -> float:
+        """
+        Gross exit value represented by this closed portion.
+        """
+
+        return (
+            self.quantity
+            * self.exit_price
+        )
 
     @property
     def return_pct(self) -> float:
         """
-        Return relative to entry capital.
+        Percentage return relative to entry capital.
         """
 
-        capital = (
-            self.quantity
-            *
-            self.entry_price
-        )
-
-        if capital == 0:
+        if self.entry_value == 0:
             return 0.0
-
 
         return (
             self.net_pnl
             /
-            capital
+            self.entry_value
+            *
+            100.0
         )
 
-
+    # ---------------------------------------------------------
+    # Outcome
+    # ---------------------------------------------------------
 
     @property
     def is_winner(self) -> bool:
+        """Whether this closed portion made money."""
+
         return self.net_pnl > 0
-
-
 
     @property
     def is_loser(self) -> bool:
+        """Whether this closed portion lost money."""
+
         return self.net_pnl < 0
-
-
 
     @property
     def is_flat(self) -> bool:
+        """Whether this closed portion broke even."""
+
         return self.net_pnl == 0
 
-
-
-    # -------------------------------------------------
+    # ---------------------------------------------------------
     # Representation
-    # -------------------------------------------------
+    # ---------------------------------------------------------
 
     def __repr__(self) -> str:
-
         outcome = (
             "WIN"
             if self.is_winner
@@ -265,11 +302,12 @@ class ClosedTrade:
             else "FLAT"
         )
 
-
         return (
             "ClosedTrade("
             f"{self.symbol}, "
+            f"{self.direction}, "
             f"{outcome}, "
+            f"qty={self.quantity}, "
             f"pnl={self.net_pnl:.2f}"
             ")"
         )

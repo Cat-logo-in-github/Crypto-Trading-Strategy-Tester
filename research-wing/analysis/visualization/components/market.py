@@ -134,7 +134,7 @@ def market_figure(
 
         height=height,
 
-        hovermode="x unified",
+        hovermode="closest",
 
         xaxis_rangeslider_visible=False,
 

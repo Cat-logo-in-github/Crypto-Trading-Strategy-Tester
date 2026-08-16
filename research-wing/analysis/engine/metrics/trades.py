@@ -142,7 +142,11 @@ def calculate(
 
 
     holding_time = sum(
-        trade.holding_period.total_seconds()
+        (
+            trade.holding_period.total_seconds()
+            if hasattr(trade.holding_period, "total_seconds")
+            else float(trade.holding_period) / 1000.0
+        )
         for trade in trades
     )
 

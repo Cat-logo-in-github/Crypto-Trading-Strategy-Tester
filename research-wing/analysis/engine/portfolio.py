@@ -1,68 +1,80 @@
 """
 analysis.engine.portfolio
 
-Portfolio model.
-
-Portfolio is the central state container for:
-
-- Account
-- Positions
-- Trade history
-
-Trades update the portfolio.
-
-Portfolio does not execute trades.
+Portfolio state and execution accounting.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 
 from analysis.engine.account import Account
 from analysis.engine.position import Position
-from analysis.engine.trade import Trade
+from analysis.engine.trade import Trade, TradeSide
 
 
 @dataclass(slots=True)
 class Portfolio:
     """
-    Trading portfolio.
+    Mutable portfolio state.
 
-    Combines financial state and asset ownership.
+    Portfolio owns:
+
+    - account
+    - positions
+    - execution history
+
+    Portfolio does not create trades or make trading decisions.
     """
 
     account: Account
-
 
     positions: dict[str, Position] = field(
         default_factory=dict
     )
 
-
     trades: list[Trade] = field(
         default_factory=list
     )
 
-
+    # =========================================================
+    # Execution
+    # =========================================================
 
     def apply_trade(
         self,
-        trade: Trade
+        trade: Trade,
     ) -> None:
         """
-        Apply executed trade.
+        Apply a completed execution atomically.
 
-        This is the only method that mutates
-        portfolio state.
+        A trade produces:
+
+            1. cash movement
+            2. position transition
+            3. realized PnL bookkeeping
+            4. execution-history record
+
+        Cash affordability is checked before the position is
+        mutated so a failed cash operation cannot leave the
+        portfolio partially updated.
         """
 
-        position = (
-            self.positions.get(
-                trade.symbol
-            )
-        )
+        self._validate_trade(trade)
 
+        # -----------------------------------------------------
+        # Validate cash BEFORE mutating position
+        # -----------------------------------------------------
+
+        self._validate_cash_movement(trade)
+
+        # -----------------------------------------------------
+        # Resolve position
+        # -----------------------------------------------------
+
+        position = self.positions.get(
+            trade.symbol
+        )
 
         if position is None:
 
@@ -74,135 +86,200 @@ class Portfolio:
                 trade.symbol
             ] = position
 
+        # -----------------------------------------------------
+        # Capture previous realized PnL
+        # -----------------------------------------------------
 
-
-        previous_realized = (
+        previous_realized_pnl = (
             position.realized_pnl
         )
 
+        # -----------------------------------------------------
+        # Apply position transition
+        # -----------------------------------------------------
 
         position.apply_trade(
             trade
         )
 
-
-        realized_change = (
+        realized_pnl_change = (
             position.realized_pnl
-            -
-            previous_realized
+            - previous_realized_pnl
         )
 
+        # -----------------------------------------------------
+        # Apply cash movement
+        # -----------------------------------------------------
 
-        if realized_change != 0:
+        self._apply_cash_movement(
+            trade
+        )
 
-            self.account.apply_realized_pnl(
-                realized_change
+        # -----------------------------------------------------
+        # Record realized PnL
+        # -----------------------------------------------------
+
+        if realized_pnl_change != 0:
+
+            self.account.record_realized_pnl(
+                realized_pnl_change
             )
 
+        # -----------------------------------------------------
+        # Record execution
+        # -----------------------------------------------------
 
         self.trades.append(
             trade
         )
 
+    # =========================================================
+    # Validation
+    # =========================================================
 
+    @staticmethod
+    def _validate_trade(
+        trade: Trade,
+    ) -> None:
+        """
+        Validate basic trade invariants.
+        """
 
-    # --------------------------------------------------
-    # Valuation
-    # --------------------------------------------------
+        if trade.quantity <= 0:
+            raise ValueError(
+                "Trade quantity must be positive."
+            )
 
-    def equity(
+        if trade.price <= 0:
+            raise ValueError(
+                "Trade price must be positive."
+            )
+
+        if trade.fees < 0:
+            raise ValueError(
+                "Trade fees cannot be negative."
+            )
+
+    def _validate_cash_movement(
         self,
-        prices: dict[str, float]
-    ) -> float:
+        trade: Trade,
+    ) -> None:
         """
-        Calculate total portfolio value.
+        Validate whether the trade's cash consequence is
+        currently possible.
 
-        Cash + unrealized PnL.
+        BUY:
+
+            cash required =
+                trade.value + fees
+
+        SELL:
+
+            cash received =
+                trade.value - fees
+
+        This method does not mutate state.
         """
 
-        value = (
-            self.account.cash
-        )
+        if trade.side is TradeSide.BUY:
 
-
-        for symbol, position in self.positions.items():
-
-            price = prices.get(
-                symbol
+            required = (
+                trade.value
+                + trade.fees
             )
 
-            if price is None:
-                continue
-
-
-            value += (
-                position.unrealized_pnl(
-                    price
+            if required > self.account.available_cash:
+                raise ValueError(
+                    "Insufficient available cash for trade: "
+                    f"required={required:.8f}, "
+                    f"available={self.account.available_cash:.8f}, "
+                    f"value={trade.value:.8f}, "
+                    f"fees={trade.fees:.8f}"
                 )
+
+        elif trade.side is TradeSide.SELL:
+
+            proceeds = (
+                trade.value
+                - trade.fees
             )
 
+            if proceeds < 0:
+                raise ValueError(
+                    "Trade fees exceed trade value."
+                )
 
-        return value
+        else:
+            raise ValueError(
+                f"Unsupported trade side: {trade.side}"
+            )
 
+    # =========================================================
+    # Cash accounting
+    # =========================================================
 
-
-    def market_value(
+    def _apply_cash_movement(
         self,
-        prices: dict[str, float]
-    ) -> float:
+        trade: Trade,
+    ) -> None:
         """
-        Gross exposure value.
+        Apply the actual cash consequence of a trade.
+
+        BUY:
+
+            cash -= value + fees
+
+        SELL:
+
+            cash += value - fees
         """
 
-        total = 0.0
+        if trade.side is TradeSide.BUY:
 
-
-        for symbol, position in self.positions.items():
-
-            price = prices.get(
-                symbol
+            cash_debit = (
+                trade.value
+                + trade.fees
             )
 
-            if price is None:
-                continue
+            self.account.debit_cash(
+                cash_debit
+            )
 
+        elif trade.side is TradeSide.SELL:
 
-            total += abs(
-                position.market_value(
-                    price
+            cash_credit = (
+                trade.value
+                - trade.fees
+            )
+
+            if cash_credit > 0:
+
+                self.account.credit_cash(
+                    cash_credit
                 )
+
+        else:
+            raise ValueError(
+                f"Unsupported trade side: {trade.side}"
             )
 
-
-        return total
-
-
-
-    # --------------------------------------------------
-    # Position helpers
-    # --------------------------------------------------
+    # =========================================================
+    # Position access
+    # =========================================================
 
     def position(
         self,
-        symbol: str
+        symbol: str,
     ) -> Position | None:
-        """
-        Retrieve position.
-        """
 
         return self.positions.get(
             symbol
         )
 
-
-
     def has_position(
         self,
-        symbol: str
+        symbol: str,
     ) -> bool:
-        """
-        Check open position.
-        """
 
         position = self.position(
             symbol
@@ -213,38 +290,125 @@ class Portfolio:
             and position.is_open
         )
 
+    def position_quantity(
+        self,
+        symbol: str,
+    ) -> float:
 
+        position = self.position(
+            symbol
+        )
+
+        if position is None:
+            return 0.0
+
+        return position.quantity
+
+    # =========================================================
+    # Position cleanup
+    # =========================================================
 
     def close_position(
         self,
-        symbol: str
+        symbol: str,
     ) -> None:
-        """
-        Remove empty positions.
-
-        Useful after full exits.
-        """
 
         position = self.positions.get(
             symbol
         )
 
-
         if (
-            position
+            position is not None
             and not position.is_open
         ):
             del self.positions[
                 symbol
             ]
 
+    # =========================================================
+    # Valuation
+    # =========================================================
 
+    def equity(
+        self,
+        prices: dict[str, float],
+    ) -> float:
+
+        total = float(
+            self.account.cash
+        )
+
+        for symbol, position in self.positions.items():
+
+            if not position.is_open:
+                continue
+
+            price = prices.get(
+                symbol
+            )
+
+            if price is None:
+                continue
+
+            total += position.market_value(
+                price
+            )
+
+        return total
+
+    def market_value(
+        self,
+        prices: dict[str, float],
+    ) -> float:
+
+        total = 0.0
+
+        for symbol, position in self.positions.items():
+
+            if not position.is_open:
+                continue
+
+            price = prices.get(
+                symbol
+            )
+
+            if price is None:
+                continue
+
+            total += abs(
+                position.market_value(
+                    price
+                )
+            )
+
+        return total
+
+    # =========================================================
+    # Account information
+    # =========================================================
+
+    @property
+    def cash(self) -> float:
+        return self.account.cash
+
+    @property
+    def available_cash(self) -> float:
+        return self.account.available_cash
+
+    @property
+    def realized_pnl(self) -> float:
+        return self.account.realized_pnl
+
+    # =========================================================
+    # Representation
+    # =========================================================
 
     def __repr__(self) -> str:
 
         return (
             "Portfolio("
             f"cash={self.account.cash:.2f}, "
+            f"available={self.account.available_cash:.2f}, "
             f"positions={len(self.positions)}, "
             f"trades={len(self.trades)}"
             ")"

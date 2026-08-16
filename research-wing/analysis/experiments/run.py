@@ -73,10 +73,12 @@ def main():
     strategy = SMACrossoverStrategy(
         fast_period=20,
         slow_period=50,
-        allocation=100.0,
+        allocation=99.0,
     )
 
-    broker = Broker()
+    broker = Broker(
+        estimated_fee_rate=0.00100025,
+    )
 
     matcher = Matcher(
         fee_model=PercentageFee(
