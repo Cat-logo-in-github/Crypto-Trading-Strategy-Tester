@@ -1,31 +1,29 @@
-@"
-# Python
+# Python and development environments
 __pycache__/
 *.py[cod]
-*.pyo
-
-# Virtual environments
 .venv/
 venv/
 env/
-
-# Environment / secrets
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+# Generated builds and local research state
+build/
+dist/
+node_modules/
+local-state/
+# Credentials and logs
 .env
 .env.*
 !.env.example
-
-# Logs
 *.log
 logs/
-
-# Raw/generated data
-data/raw/
+# Downloaded data; bundled synthetic fixtures remain tracked
 **/data/raw/
 **/data/processed/
-
-# OS/editor files
+# Editor and operating-system metadata
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
-"@ | Set-Content .gitignore

@@ -1,0 +1,13 @@
+include AUDIT.md IMPLEMENTATION_STATUS.md LICENSE NOTICE.md README.md pyproject.toml
+recursive-include src/hypothesis_lab *.py *.csv *.md *.html *.css *.js
+recursive-include tests *.py
+recursive-include scripts *.py
+recursive-include scripts *.cs *.txt
+recursive-include examples *.py
+recursive-include docs *.md
+recursive-include site *.html *.css *.svg *.png
+prune work
+prune dist
+prune build
+prune legacy
+global-exclude *.pyc *.pyo

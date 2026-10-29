@@ -1,0 +1,103 @@
+name: Downloadable app and source release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify the offline core
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests -v
+      - name: Build and inspect small source ZIP
+        run: python scripts/package.py
+      - name: Record source checksum
+        working-directory: dist
+        run: sha256sum hypothesis-lab.zip > hypothesis-lab.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hypothesis-lab-source
+          path: |
+            dist/hypothesis-lab.zip
+            dist/hypothesis-lab.zip.sha256
+          if-no-files-found: error
+  windows-app:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Obtain and verify the official embedded Python runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path work -Force | Out-Null
+          $runtimeArchive = 'work/python-3.14.10-embed-amd64.zip'
+          Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.14.10/python-3.14.10-embed-amd64.zip' -OutFile $runtimeArchive
+          $expectedHash = '90905e64a840557d8c1bc4f5b74db3d7ee85e3ffb217611cac1c7813acea4159'
+          if ((Get-FileHash -LiteralPath $runtimeArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedHash) {
+            throw 'Official Python runtime checksum mismatch'
+          }
+      - name: Build portable app with its private Python runtime
+        run: python scripts/build_windows.py --runtime-zip work/python-3.14.10-embed-amd64.zip --output dist/Hypothesis-Lab-Windows.zip
+      - name: Extract the exact download asset
+        shell: pwsh
+        run: Expand-Archive -LiteralPath dist/Hypothesis-Lab-Windows.zip -DestinationPath dist/windows-clean
+      - name: Verify the downloaded app without system Python or external APIs
+        shell: pwsh
+        run: |
+          $app = Join-Path $PWD 'dist/windows-clean/Hypothesis-Lab/Hypothesis Lab.exe'
+          $process = Start-Process -FilePath $app -ArgumentList '--smoke-test' -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "Portable app smoke test failed with exit code $($process.ExitCode)" }
+      - name: Record Windows checksum
+        shell: pwsh
+        run: |
+          $archiveHash = (Get-FileHash -LiteralPath dist/Hypothesis-Lab-Windows.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath dist/Hypothesis-Lab-Windows.zip.sha256 -Value "$archiveHash  Hypothesis-Lab-Windows.zip" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hypothesis-lab-windows
+          path: |
+            dist/Hypothesis-Lab-Windows.zip
+            dist/Hypothesis-Lab-Windows.zip.sha256
+          if-no-files-found: error
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release'
+    needs: [source, windows-app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hypothesis-lab-*
+          merge-multiple: true
+          path: dist
+      - name: Attach both downloads to the versioned release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          case "$TAG_NAME" in v[0-9]*) ;; *) echo 'Use a version tag such as v0.2.0'; exit 1 ;; esac
+          if ! gh release view "$TAG_NAME" > /dev/null 2>&1
+          then
+            gh release create "$TAG_NAME" --title "$TAG_NAME" --generate-notes
+          fi
+          gh release upload "$TAG_NAME" dist/hypothesis-lab.zip dist/Hypothesis-Lab-Windows.zip dist/hypothesis-lab.zip.sha256 dist/Hypothesis-Lab-Windows.zip.sha256 --clobber
