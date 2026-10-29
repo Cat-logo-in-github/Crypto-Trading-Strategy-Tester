@@ -303,12 +303,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(429, {"error": "A provider request is already in progress"})
                     return
                 try:
-                    last = self.server.last_refresh.get(path, 0)
-                    if time.monotonic() - last < 60:
+                    last = self.server.last_refresh.get(path)
+                    now = time.monotonic()
+                    if last is not None and now - last < 60:
                         raise ValueError(
                             "Wait at least 60 seconds between requests to this provider"
                         )
-                    self.server.last_refresh[path] = time.monotonic()
+                    self.server.last_refresh[path] = now
                     if path == "/api/feed":
                         value = kraken_snapshot()
                     elif path == "/api/weather":

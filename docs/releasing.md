@@ -16,6 +16,10 @@ No local Git command is required for this path.
 
 The source ZIP must include `.github/workflows` at the repository root for these steps to work. A local build, uploaded source or successful Pages deployment does not itself mean the Windows release asset is already published. This task configures the workflows; it does not publish a remote site or release on the owner's behalf.
 
+### If publishing shows Skipped
+
+A normal branch push builds the two archives as Actions artifacts. The **publish** job deliberately skips those pushes; it attaches public download assets only for a version tag beginning with `v` (for example `v0.2.0`) or a published release. Upload the extracted source contents, not the unopened ZIP as a repository file. After the checks pass, publish a normal release from the current corrected commit. If an earlier tag points at faulty source, create a new version tag for the corrected commit rather than rerunning the old tag. Failed prerequisite build/test jobs also prevent publication. The Pages button works only after the normal release contains `Hypothesis-Lab-Windows.zip` under Assets.
+
 ## Visitors: three steps
 
 1. Download **Hypothesis-Lab-Windows.zip** from the published release or the Pages download button.

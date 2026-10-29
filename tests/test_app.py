@@ -502,6 +502,33 @@ class ServerTests(IsolatedState):
         self.assertEqual(status, 200)
         self.assertFalse(removed["saved"])
 
+    def test_provider_first_request_at_clock_zero_and_exact_cooldown_boundary(self):
+        with (
+            patch("hypothesis_lab.server.time.monotonic", return_value=0.0) as clock,
+            patch(
+                "hypothesis_lab.server.kraken_snapshot", return_value={"kind": "snapshot"}
+            ) as feed,
+            patch(
+                "hypothesis_lab.server.alpha_vantage_test", return_value={"status": "connected"}
+            ) as quote,
+        ):
+            status, body, _ = self.request("POST", "/api/feed")
+            self.assertEqual(status, 200, body)
+            self.assertEqual(feed.call_count, 1)
+            clock.return_value = 59.999
+            self.assertEqual(self.request("POST", "/api/feed")[0], 400)
+            self.assertEqual(feed.call_count, 1)
+            # Each provider has its own cooldown; the first request is always eligible.
+            self.assertEqual(
+                self.request("POST", "/api/settings/save", {"key": "TEST_KEY", "consent": True})[0],
+                200,
+            )
+            self.assertEqual(self.request("POST", "/api/settings/test")[0], 200)
+            self.assertEqual(quote.call_count, 1)
+            clock.return_value = 60.0
+            self.assertEqual(self.request("POST", "/api/feed")[0], 200)
+            self.assertEqual(feed.call_count, 2)
+
     def test_concurrent_run_lock_and_shutdown(self):
         self.server.run_lock.acquire()
         try:
