@@ -1,6 +1,18 @@
 # Public Python and local HTTP APIs
 
-The v0.2 interfaces are small pre-1.0 extension boundaries. Inputs and research records are JSON-compatible; arbitrary browser-submitted Python, pickle and joblib objects are not executed. The core has no runtime dependencies beyond Python's standard library.
+The v0.3 interfaces are small pre-1.0 extension boundaries. Inputs and research records are JSON-compatible; arbitrary browser-submitted Python, pickle and joblib objects are not executed. The core has no runtime dependencies beyond Python's standard library.
+
+## Guided studio additions
+
+`POST /api/algorithm/plan` takes `{description,fields}` and optional user `connection`/session `credential`. It returns a reviewed draft `{entry,exit,signals,sizing,amount,weight}`, executable/clarification flags, available functions and data search terms. It does not assert that the requested data exists. `POST /api/algorithm/preview` accepts the normal data/execution payload plus that algorithm and returns a bounded sample/interpretation/period/warnings without retaining an experiment. `POST /api/run` supports `mode:"algorithm"` alongside rules/ml/model/endpoint.
+
+`algorithm.signals` is a list of distinct `{name,expression}` definitions evaluated causally in order. `algorithms.SignalInterpreter`, `apply_signals` and `algorithm_decisions` expose the same bounded operations in Python. See [Signal Studio](../signal-studio.md) for math, text-derived/geographic conditions and limits. There is no unrestricted Python execution.
+
+`period:{start,end,last_bars}` selects the historical research window. UTC date-only end values include that day; only completed market bars ending by the limit are selected. Rules/algorithms retain prior warmup but trade only inside the active window. Models use chronological held-out evaluation within the selected period. Records distinguish `period` from the actual portfolio `evaluation` window. `backtest`, `benchmark` and `decisions_for` accept keyword `start_index` inclusive / `end_index` exclusive bounds.
+
+`GET /api/execution/profiles` returns dated profile metadata, official fee evidence, source links and separate assumptions. Execution configuration adds `fixed_fee` (quote currency/fill), `spread_bps` (full spread), `data_delay_ms` and `latency_ms`. `Decision.available_at` optionally declares later readiness. `model_config.include_inference_latency` defaults true for endpoint replay, using measured current service duration as a scenario. Costs and clocks are detailed in the [engine audit](../engine-audit-2026.md).
+
+`inspect_dataset` now also returns `quality`, `interpretation` and `suggestions`. Formats include CSV/TSV/JSON/NDJSON/GeoJSON Point/properties. Composite calendar parts, explicit date layouts, typed entity filters, text equality and causal day/month event aggregation are supported; see [data mapping contracts](../data-sources.md). `align_features` accepts `decision_delay_seconds=0.0`. Catalog search adds auto/nasa/europa/hdx with relevance and supported-table/reference distinctions. Static studio/icon assets are bundled with the local app and Pages.
 
 ## Data, rules and execution
 
@@ -20,7 +32,7 @@ baseline = benchmark(bars, config)
 
 `Bar(timestamp, open, high, low, close, volume=0)` and `Event(observed_at, available_at, value, field=..., location=...)` are immutable validated records. Bar timestamps are UTC-normalized interval opens. Strictly increasing bars, finite positive OHLC and explicit duration are required. `load_bars`/`load_events` accept local paths or CSV text with `content=True`.
 
-`Decision` accepts exactly one of `target_weight` or fee-inclusive `buy_cash`. `None` holds without a new order. One intent slot exists per completed bar; the engine fills at the next supplied open and expires an unfillable final intent. Results contain metrics, equity/portfolio snapshots, fills, orders, execution config and warnings. Fills include costs and portfolio changes; these records are evidence, not an interface for creating fictional executions.
+`Decision` accepts exactly one of `target_weight` or fee-inclusive `buy_cash`. `None` holds without a new order. One intent slot exists per completed bar; the engine fills at the first later supplied open at or after data, decision and submission readiness, and expires an intent with no eligible supplied open. Results contain metrics, equity/portfolio snapshots, fills, orders, execution config and warnings. Fills include costs and portfolio changes; these records are evidence, not an interface for creating fictional executions.
 
 Rule trees use `all`/`any` groups and named comparisons. Mapped external fields use `event:field_name`; market features such as `close`, `sma_20` and `momentum_20` use their supported names. `parse_hypothesis(text, fields=None)` recognizes documented full-match grammars and can resolve mapped field aliases. It rejects unsupported prose. A trusted local Python strategy implements `decide(history: tuple[Bar, ...]) -> Decision | None`; `python_decisions` supplies the immutable history prefix through that completed bar.
 

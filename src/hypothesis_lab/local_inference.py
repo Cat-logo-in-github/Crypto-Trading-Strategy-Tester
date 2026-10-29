@@ -8,7 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import timedelta
 from typing import Any
 
@@ -298,6 +298,9 @@ def run_endpoint_model(
         }
     )
     horizon = _integer(config.get("horizon", 1), "Forecast horizon", 1, 30)
+    include_latency = config.get("include_inference_latency", True)
+    if not isinstance(include_latency, bool):
+        raise ValueError("Choose whether to replay measured inference latency")
     target_field = config.get("target_field", "market.close")
     target_type = config.get("target_type", "increase")
     if (
@@ -345,6 +348,7 @@ def run_endpoint_model(
     records: list[dict[str, Any]] = []
     outputs: list[dict[str, Any]]
     if connection.get("kind", "llm") == "tabular":
+        batch_started = time.monotonic()
         result = _request(
             connection,
             {
@@ -359,8 +363,14 @@ def run_endpoint_model(
             raise ValueError(
                 "The tabular endpoint must return one configured scalar prediction per supplied row"
             )
+        batch_latency = time.monotonic() - batch_started
         outputs = [
-            {"value": _number(v, "Endpoint prediction"), "text": "", "completion_tokens": None}
+            {
+                "value": _number(v, "Endpoint prediction"),
+                "text": "",
+                "completion_tokens": None,
+                "latency_seconds": batch_latency,
+            }
             for v in values
         ]
     else:
@@ -387,6 +397,16 @@ def run_endpoint_model(
     decisions: list[Decision | None] = [None] * (len(bars) - start)
     for i, response in zip(indices, outputs):
         decision, matched = prediction_decision(response["value"], policy)
+        measured_latency = _number(response.get("latency_seconds", 0), "Measured inference latency")
+        if measured_latency < 0:
+            raise ValueError("Measured inference latency must be nonnegative")
+        ready_at = bars[i].timestamp + timedelta(
+            seconds=execution.bar_seconds
+            + execution.data_delay_ms / 1000
+            + (measured_latency if include_latency else 0)
+        )
+        if decision is not None and include_latency:
+            decision = replace(decision, available_at=ready_at)
         decisions[i - start] = decision
         actual = actual_target(i)
         forecast_correct = (
@@ -397,9 +417,7 @@ def run_endpoint_model(
         records.append(
             {
                 "timestamp": bars[i].timestamp.isoformat(),
-                "decision_at": (
-                    bars[i].timestamp + timedelta(seconds=execution.bar_seconds)
-                ).isoformat(),
+                "decision_at": ready_at.isoformat(),
                 "index": i,
                 "bar_index": i,
                 "features": feature_values[i],
@@ -460,6 +478,7 @@ def run_endpoint_model(
         "horizon",
         "decision",
         "evaluation_start_index",
+        "include_inference_latency",
         *asdict(ExecutionConfig()),
     }
     public_config = {key: value for key, value in config.items() if key in public_config_fields}
@@ -468,6 +487,8 @@ def run_endpoint_model(
         "model": {"family": "user_endpoint", "output_kind": kind, "feature_names": names},
         "configuration": {
             **public_config,
+            "evaluation_start_index": start,
+            "include_inference_latency": include_latency,
             "connection": public_connection(connection, credential),
             "decision": policy,
             "target_field": target_field,
@@ -484,7 +505,12 @@ def run_endpoint_model(
         "warnings": [
             "Historical model/LLM replay: pretraining knowledge and data provenance are unknown. This is not a verified out-of-sample model evaluation.",
             "Prompts contain configured historical features only. Modern LLMs can still contain future knowledge; token behavior can vary across model versions, servers, seeds and sampling settings.",
-            "Inference occurs now. Historical trade times are simulation times, not historical model availability. Measured inference latency is reported but not applied to market fills.",
+            "Inference occurs now; this does not prove historical model availability. "
+            + (
+                "Measured present-day inference duration is replayed as an explicit timing scenario before order latency, moving fills to the next eligible supplied bar open."
+                if include_latency
+                else "Measured inference duration is reported only; you explicitly disabled its replay into fill eligibility."
+            ),
             "The app sends requests only to the endpoint you selected; no operator backend or model weights are included.",
         ],
         "discrepancy_summary": {

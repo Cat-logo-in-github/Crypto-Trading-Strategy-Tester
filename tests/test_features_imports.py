@@ -96,6 +96,24 @@ class ExplicitTimeFormatTests(unittest.TestCase):
 
 
 class MarketMappingTests(unittest.TestCase):
+    def test_composite_calendar_market_timestamps_are_bar_opens(self):
+        result = market_from_dataset(
+            "Year,Month,Day,open,high,low,close\n2024,2,28,10,12,9,11\n2024,2,29,11,13,10,12\n",
+            "csv",
+            {
+                "timestamp_parts": {"year": "Year", "month": "Month", "day": "Day"},
+                "timezone": "UTC",
+            },
+        )
+        self.assertEqual(result["start"], "2024-02-28T00:00:00+00:00")
+        self.assertEqual(result["end"], "2024-02-29T00:00:00+00:00")
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            market_from_dataset(
+                '[{"timestamp":"2024-01-01T00:00:00Z","open":true,"high":true,"low":true,"close":true},{"timestamp":"2024-01-02T00:00:00Z","open":true,"high":true,"low":true,"close":true}]',
+                "json",
+                {},
+            )
+
     def setUp(self):
         self.rows = [
             {"t": SECONDS * 1000, "o": 10, "h": 12, "l": 9, "c": 11, "v": 7},

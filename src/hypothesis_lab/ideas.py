@@ -31,6 +31,10 @@ def plan_idea(query: str, fields: list[str] | None = None) -> dict:
         else "relationship"
     )
     inferred_model = bool(re.search(r"probability|predict|forecast|model|llm|tokens?", lower))
+    orbital = bool(re.search(r"satellit|orbit|spacecraft|overpass|\btle\b", lower))
+    event_question = bool(
+        re.search(r"count|number|passes|events|arrivals|crossings|incidents|mentions", lower)
+    )
     window = re.search(r"(\d+)\s*[- ]?(bar|day|week|month)s?", lower)
     signals = [
         {
@@ -54,9 +58,53 @@ def plan_idea(query: str, fields: list[str] | None = None) -> dict:
         )
     if not re.search(r"\$\d+|\b\d+\s*%\s*(?:of|portfolio|equity)", lower):
         clarifications.append("Choose cash budget or target portfolio weight.")
+    if orbital:
+        clarifications.extend(
+            [
+                "Define a satellite pass precisely: which objects, ground region, height/elevation or distance threshold, timezone, and whether a pass is counted once per crossing or per observation.",
+                "Historical pass events need historical orbital inputs plus documented propagation, or a publisher's event history. A current satellite catalog or image collection alone cannot establish them.",
+            ]
+        )
+    if event_question:
+        clarifications.append(
+            "Confirm that each input row is one event, choose the time bucket, and define whether missing/empty buckets mean unknown or zero. The app never invents absent events."
+        )
     return {
         "query": text,
         "search_terms": terms,
+        "recommended_catalogs": ["nasa", "europa", "socrata"]
+        if orbital
+        else ["auto", "worldbank", "hdx"],
+        "search_queries": [
+            {
+                "query": "satellite orbit",
+                "catalog": "nasa",
+                "match": "related",
+                "reason": "Find authoritative orbital/Earth observation collections before considering geographic matches.",
+            },
+            {
+                "query": terms,
+                "catalog": "europa",
+                "match": "candidate",
+                "reason": "Search the actual concept; verify any returned resource measures it.",
+            },
+        ]
+        if orbital
+        else [
+            {
+                "query": terms,
+                "catalog": "auto",
+                "match": "candidate",
+                "reason": "Search independent public catalogs; private measurements still require authorized data.",
+            }
+        ],
+        "suggested_interpretation": {
+            "kind": "event_log" if event_question else "time_series",
+            "requires_definition": True,
+            "aggregation": {"operation": "count", "frequency": "day", "fields": []}
+            if event_question
+            else None,
+        },
         "data_requirements": [
             {
                 "concept": terms,

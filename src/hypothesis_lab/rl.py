@@ -198,6 +198,10 @@ def run_rl(bars: list[Bar], config: Mapping[str, Any] | None = None) -> dict[str
         slippage_bps=number("slippage_bps", 5),
         periods_per_year=number("periods_per_year", 365),
         bar_seconds=number("bar_seconds", 86400),
+        fixed_fee=number("fixed_fee", 0),
+        spread_bps=number("spread_bps", 0),
+        data_delay_ms=number("data_delay_ms", 0),
+        latency_ms=number("latency_ms", 0),
     )
     rng = random.Random(int(seed))
     table: dict[str, list[float]] = {}

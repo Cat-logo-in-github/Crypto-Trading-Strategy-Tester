@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -70,6 +71,46 @@ def _source_int(value: Any, label: str, minimum: int, maximum: int) -> int:
 def catalog() -> list[dict[str, Any]]:
     return [
         {
+            "id": "auto",
+            "name": "Search across relevant public catalogs",
+            "description": "Search several real catalogs and rank measured concepts ahead of geographic coincidences. Metadata matches do not prove that data is usable.",
+            "authentication": "none for public discovery",
+            "implemented": True,
+            "capabilities": ["search"],
+            "documentation": "docs/data-sources.html",
+            "limits": "At most three catalogs per search; failures and partial results are reported.",
+        },
+        {
+            "id": "nasa",
+            "name": "NASA Earthdata collections",
+            "description": "Discover Earth observation, satellite, climate and geodesy collections in NASA CMR. These are collection metadata, not ready-made pass events or imagery-derived training features.",
+            "authentication": "public metadata; collection downloads may require your Earthdata account",
+            "implemented": True,
+            "capabilities": ["search"],
+            "documentation": "https://cmr.earthdata.nasa.gov/search/site/docs/search/api.html",
+            "limits": "Collection discovery only. HDF/NetCDF/raster extraction and orbital propagation require an external documented conversion.",
+        },
+        {
+            "id": "europa",
+            "name": "European open data catalog",
+            "description": "Discover public datasets from European institutions and national/regional catalogs across many domains.",
+            "authentication": "none for discovery; resource-specific access",
+            "implemented": True,
+            "capabilities": ["search"],
+            "documentation": "https://data.europa.eu/api/hub/search/",
+            "limits": "Download supported public HTTPS CSV/TSV/JSON/NDJSON/GeoJSON resources only. Publisher terms, actual file size and availability apply.",
+        },
+        {
+            "id": "hdx",
+            "name": "UN OCHA Humanitarian Data Exchange",
+            "description": "Discover global population, infrastructure, environment, health and humanitarian datasets. Restricted/request-only and large binary resources remain references.",
+            "authentication": "public metadata; resource-specific access",
+            "implemented": True,
+            "capabilities": ["search"],
+            "documentation": "https://data.humdata.org/faq",
+            "limits": "Public catalog metadata; each resource has its own access, license, sensitivity and format requirements.",
+        },
+        {
             "id": "socrata",
             "name": "Public data catalog search",
             "description": "Search across public city, government and nonprofit catalogs: traffic, permits, business activity, environment and more.",
@@ -113,8 +154,8 @@ def catalog() -> list[dict[str, Any]]:
         },
         {
             "id": "custom_https",
-            "name": "Your HTTPS CSV / JSON API",
-            "description": "Fetch a public HTTPS dataset directly from your computer. Select CSV or a JSON record-array path and optionally supply your own provider key.",
+            "name": "Your HTTPS table / JSON API",
+            "description": "Fetch a public HTTPS dataset directly from your computer. Supports CSV, TSV, JSON, NDJSON and GeoJSON properties/points, with an optional separate provider key.",
             "authentication": "optional user key",
             "implemented": True,
             "documentation": "docs/data-sources.html",
@@ -244,7 +285,7 @@ def _download(url: str, headers: dict[str, str] | None = None) -> bytes:
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "HypothesisLab/0.2 local-data-research",
+            "User-Agent": "HypothesisLab/0.3 local-data-research",
             "Accept": "application/json,text/csv",
             **(headers or {}),
         },
@@ -384,13 +425,17 @@ def _custom(config: dict, credential: str | None) -> dict:
         records = _records(
             _json(raw), config.get("records_path", ""), config.get("record_path", "")
         )
-    elif format_name == "csv":
+    elif format_name in {"csv", "tsv"}:
         try:
             csv.field_size_limit(MAX_BYTES)
-            rows = csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
+            rows = csv.DictReader(
+                io.StringIO(raw.decode("utf-8-sig")),
+                delimiter="\t" if format_name == "tsv" else ",",
+            )
             if (
                 not rows.fieldnames
                 or len(rows.fieldnames) > 100
+                or any(not name.strip() for name in rows.fieldnames)
                 or len(rows.fieldnames) != len(set(rows.fieldnames))
             ):
                 raise SourceError("CSV requires 1..100 distinct column names")
@@ -405,15 +450,30 @@ def _custom(config: dict, credential: str | None) -> dict:
                 raise SourceError("The CSV source contains no observations")
         except (UnicodeError, csv.Error):
             raise SourceError("The provider did not return a valid UTF-8 CSV table") from None
+    elif format_name in {"ndjson", "geojson"}:
+        from .features import read_records
+
+        try:
+            records = read_records(raw.decode("utf-8-sig"), format_name)
+            if len(records) > MAX_ROWS:
+                raise SourceError("Source has more than 5,000 rows; narrow its query")
+        except (UnicodeError, ValueError, RecursionError):
+            raise SourceError(
+                "Source did not return a supported bounded UTF-8 table in the chosen format"
+            ) from None
+        # The local tabular normalization is explicit; raster/polygon geometry is not invented.
+        format_name = "json"
     else:
-        raise SourceError("Select csv or json as the source format")
+        raise SourceError("Select csv, tsv, json, ndjson or geojson as the source format")
     records = _clean_records(records, credential)
     columns = list(dict.fromkeys(key for row in records for key in row))
     if not columns:
         raise SourceError("No noncredential data columns were returned")
-    if format_name == "csv":
+    if format_name in {"csv", "tsv"}:
         output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=columns)
+        writer = csv.DictWriter(
+            output, fieldnames=columns, delimiter="\t" if format_name == "tsv" else ","
+        )
         writer.writeheader()
         writer.writerows(records)
         content = output.getvalue()
@@ -432,6 +492,7 @@ def _custom(config: dict, credential: str | None) -> dict:
             "url": public_url,
             "fetched_at": acquired,
             "authentication": auth,
+            "input_format": config.get("format", "json"),
             "storage": "session only; no operator transmission",
         },
         "mapping_suggestion": {"availability_mode": "acquired", "acquired_at": acquired},
@@ -579,6 +640,10 @@ def fetch_source(config: dict, credential: str | None = None) -> dict:
         raise SourceError(
             "AISStream requires your own account key and a live WebSocket collector. It does not supply historical training records through this app. Import historical observations or use another documented provider."
         )
+    if identity in {"nasa", "reference", "space_reference", "europa", "hdx", "auto"}:
+        raise SourceError(
+            "This selection is discovery metadata or a reference. Choose a supported public table resource, or obtain and explicitly extract timestamped observations from its publisher; no history or satellite events are fabricated."
+        )
     raise SourceError("Choose a catalog source or configure a public HTTPS CSV/JSON endpoint")
 
 
@@ -601,6 +666,256 @@ def _wb_response(url: str) -> tuple[dict, list]:
     return metadata, result[1]
 
 
+def _label(value: Any) -> str:
+    if isinstance(value, str):
+        return re.sub(r"<[^>]*>", " ", value).strip()
+    if isinstance(value, dict):
+        return _label(
+            value.get("en")
+            or value.get("title")
+            or value.get("label")
+            or value.get("name")
+            or next(iter(value.values()), "")
+        )
+    if isinstance(value, list):
+        return "; ".join(_label(item) for item in value[:3])
+    return ""
+
+
+def _relevance(query: str, dataset: dict) -> dict:
+    stop = set(
+        "the a an and or of for in on to by from with when than if then buy sell market bitcoin stock price data dataset number many how more less over under new york jersey ny nj vs versus count compare change rising falling using during between".split()
+    )
+
+    def stem(word):
+        return word[:-1] if word.endswith("s") and len(word) > 4 else word
+
+    words = {
+        stem(word) for word in re.findall(r"[a-z][a-z0-9]+", query.casefold()) if word not in stop
+    }
+    title = _label(dataset.get("title", "")).casefold()
+    body = (title + " " + _label(dataset.get("description", ""))).casefold()
+    tokens = {stem(word) for word in re.findall(r"[a-z][a-z0-9]+", body)}
+    matched = words & tokens
+    space_words = {"satellite", "orbit", "orbital", "spacecraft", "tle", "overpass"}
+    space_query = bool(words & space_words)
+    space_match = bool(tokens & space_words)
+    score = len(matched) * 4 + sum(word in title for word in matched) * 3
+    if space_query:
+        score += 20 if space_match else -30
+    exact = (
+        bool(words) and words <= tokens and dataset.get("downloadable", bool(dataset.get("config")))
+    )
+    match = "exact" if exact else "related" if matched or space_query and space_match else "weak"
+    if space_query and not space_match:
+        match = "weak"
+    return {
+        "match": match,
+        "score": score,
+        "reason": "Metadata matches the requested terms; verify the actual measurement, units and timing."
+        if exact
+        else "Related concept/domain; additional definition or extraction is required. It is not an exact measured series."
+        if match == "related"
+        else "Weak metadata overlap or geography only; do not substitute this for the requested phenomenon.",
+    }
+
+
+def _space_references(query: str) -> list[dict]:
+    if not re.search(r"satellit|orbit|spacecraft|overpass|\btle\b", query, re.I):
+        return []
+    return [
+        {
+            "id": "celestrak-reference",
+            "title": "CelesTrak satellite catalog and orbital elements (reference)",
+            "description": "Official current satellite catalog and general perturbation orbital elements. A satellite pass over a chosen area needs a defined region, historical orbit vintages and an explicit propagation/event extraction method. Current orbital elements are not past pass-event history.",
+            "provider": "CelesTrak",
+            "page": "https://celestrak.org/satcat/search.php",
+            "url": "https://celestrak.org/NORAD/documentation/gp-data-formats.php",
+            "format": "reference",
+            "license": "Review CelesTrak data use and service terms",
+            "access": "Publisher reference; no automatic historical event extraction",
+            "key_required": False,
+            "downloadable": False,
+            "data_kind": "orbital_catalog_reference",
+            "config": None,
+            "limitations": [
+                "This app does not propagate orbits or derive historical satellite passes. Import an authorized timestamped pass-event table with availability times for that experiment."
+            ],
+            "curated_reference": True,
+        }
+    ]
+
+
+def _nasa_search(query: str, limit: int) -> tuple[list[dict], Any]:
+    result = _json(
+        _download(
+            "https://cmr.earthdata.nasa.gov/search/collections.json?"
+            + urllib.parse.urlencode({"keyword": query, "page_size": limit})
+        )
+    )
+    if (
+        not isinstance(result, dict)
+        or not isinstance(result.get("feed"), dict)
+        or not isinstance(result["feed"].get("entry"), list)
+    ):
+        raise SourceError("NASA CMR returned an unavailable or malformed collection search")
+    datasets = []
+    for item in result["feed"]["entry"][:limit]:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("id"), str)
+            or not re.fullmatch(r"C\d+-[A-Za-z0-9_]+", item["id"])
+        ):
+            continue
+        identity = item["id"]
+        datasets.append(
+            {
+                "id": identity,
+                "title": _label(item.get("title", item.get("dataset_id", identity)))[:250],
+                "description": _label(item.get("summary", ""))[:1200],
+                "provider": _label(item.get("data_center", "NASA Earthdata")),
+                "url": f"https://cmr.earthdata.nasa.gov/search/concepts/{identity}.html",
+                "page": f"https://cmr.earthdata.nasa.gov/search/concepts/{identity}.html",
+                "format": "collection metadata",
+                "license": "Collection-specific access/use and attribution terms; inspect publisher",
+                "access": "Public discovery metadata; actual data may require your Earthdata account or extraction",
+                "key_required": False,
+                "downloadable": False,
+                "data_kind": "earth_observation_collection",
+                "temporal": {"start": item.get("time_start"), "end": item.get("time_end")},
+                "platforms": item.get("platforms", [])[:20]
+                if isinstance(item.get("platforms"), list)
+                else [],
+                "config": None,
+                "limitations": [
+                    "Collection metadata is not a numeric training series. Binary imagery, NetCDF/HDF and historical orbital pass extraction are not implemented; use publisher tools and import documented features."
+                ],
+            }
+        )
+    return datasets, None
+
+
+def _ckan_search(query: str, catalog_name: str, limit: int) -> tuple[list[dict], Any]:
+    endpoint = (
+        "https://data.europa.eu/api/hub/search/ckan/package_search"
+        if catalog_name == "europa"
+        else "https://data.humdata.org/api/3/action/package_search"
+    )
+    result = _json(_download(endpoint + "?" + urllib.parse.urlencode({"q": query, "rows": limit})))
+    if (
+        not isinstance(result, dict)
+        or result.get("success") is not True
+        or not isinstance(result.get("result"), dict)
+        or not isinstance(result["result"].get("results"), list)
+    ):
+        raise SourceError("The selected public catalog returned an unavailable or malformed search")
+    datasets = []
+    for item in result["result"]["results"][:limit]:
+        if not isinstance(item, dict) or item.get("private") is True:
+            continue
+        identity = item.get("id", item.get("name"))
+        if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,150}", identity):
+            continue
+        translations = item.get("translation", {})
+        english = translations.get("en", {}) if isinstance(translations, dict) else {}
+        title = (
+            _label(item.get("title"))
+            or _label(english.get("title") if isinstance(english, dict) else "")
+            or identity
+        )
+        description = _label(item.get("notes", item.get("description", ""))) or _label(
+            english.get("notes") if isinstance(english, dict) else ""
+        )
+        resources, usable = [], None
+        for resource in (
+            item.get("resources", [])[:50] if isinstance(item.get("resources"), list) else []
+        ):
+            if not isinstance(resource, dict):
+                continue
+            format_name = (
+                _label(resource.get("format", ""))
+                .casefold()
+                .replace("application/", "")
+                .replace("text/", "")
+            )
+            format_name = {
+                "jsonl": "ndjson",
+                "x-ndjson": "ndjson",
+                "tab-separated-values": "tsv",
+                "geo+json": "geojson",
+            }.get(format_name, format_name)
+            link = resource.get("download_url", resource.get("url", resource.get("access_url", "")))
+            if isinstance(link, list):
+                link = link[0] if len(link) == 1 else ""
+            if isinstance(link, str) and link.startswith("[https://") and link.endswith("]"):
+                link = link[1:-1]
+            safe = False
+            try:
+                _, link = _url(link)
+                # Keep query parameters in the actual explicitly selected download, but never in provenance.
+                actual = resource.get(
+                    "download_url", resource.get("url", resource.get("access_url", ""))
+                )
+                if (
+                    isinstance(actual, str)
+                    and actual.startswith("[https://")
+                    and actual.endswith("]")
+                ):
+                    actual = actual[1:-1]
+                safe = isinstance(actual, str)
+            except SourceError:
+                actual = ""
+            supported = (
+                safe
+                and format_name in {"csv", "tsv", "json", "ndjson", "geojson"}
+                and not item.get("is_requestdata_type")
+            )
+            resources.append(
+                {
+                    "title": _label(resource.get("name", resource.get("description", "")))[:200],
+                    "format": format_name,
+                    "url": link if safe else "",
+                    "supported": supported,
+                }
+            )
+            if supported and usable is None:
+                usable = {
+                    "id": "custom_https",
+                    "url": actual,
+                    "format": format_name,
+                    "auth": "none",
+                }
+        page = (
+            f"https://data.europa.eu/data/datasets/{identity}"
+            if catalog_name == "europa"
+            else f"https://data.humdata.org/dataset/{item.get('name', identity)}"
+        )
+        datasets.append(
+            {
+                "id": f"{catalog_name}:{identity}",
+                "title": title[:250],
+                "description": description[:1200],
+                "provider": _label(item.get("publisher", item.get("organization", "")))[:250]
+                or catalog_name,
+                "page": page,
+                "url": usable["url"] if usable else page,
+                "format": usable["format"] if usable else "publisher resources",
+                "license": _label(item.get("license_title", item.get("license_id", "")))
+                or "Publisher/resource-specific; inspect source terms",
+                "access": "Public metadata; file availability, account, quota and terms depend on publisher",
+                "key_required": False,
+                "config": usable,
+                "downloadable": usable is not None,
+                "data_kind": "public_dataset",
+                "resources": resources,
+                "limitations": [
+                    "Only an explicitly selected supported public HTTPS text resource can be downloaded within 4 MB/5,000 rows. Compressed archives, rasters, spreadsheets and other binary formats need external extraction. Catalog metadata dates do not prove historical feature publication times."
+                ],
+            }
+        )
+    return datasets, result["result"].get("count")
+
+
 def search_sources(query: str, catalog_name: str = "socrata", limit: int = 12) -> dict:
     """Search real public catalogs, returning candidates rather than invented datasets."""
     if not isinstance(query, str) or not 2 <= len(query.strip()) <= 200:
@@ -608,7 +923,48 @@ def search_sources(query: str, catalog_name: str = "socrata", limit: int = 12) -
     limit = _source_int(limit, "Search result limit", 1, 20)
     query = query.strip()
     datasets = []
-    if catalog_name == "socrata":
+    extra_warnings, searched = [], [catalog_name]
+    effective_queries = {catalog_name: query}
+    concept_query = (
+        "satellite orbit"
+        if re.search(r"satellit|orbit|spacecraft|overpass|\btle\b", query, re.I)
+        and len(query.split()) > 3
+        else query
+    )
+    if catalog_name == "auto":
+        secondary = (
+            "nasa"
+            if re.search(r"satellit|orbit|spacecraft|overpass|\btle\b", query, re.I)
+            else "worldbank"
+            if re.search(r"gdp|inflation|urban|econom|population growth", query, re.I)
+            else "hdx"
+        )
+        searched = [secondary, "europa", "socrata"]
+        effective_queries = {}
+
+        def run(name):
+            try:
+                return name, search_sources(query, name, min(limit, 8)), None
+            except SourceError as error:
+                return name, None, str(error)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            for name, result, error in executor.map(run, searched):
+                if result is not None:
+                    datasets.extend(result["datasets"])
+                    effective_queries.update(result.get("effective_queries", {}))
+                else:
+                    extra_warnings.append(f"{name} could not be searched: {error}")
+        datasets.extend(_space_references(query))
+        total = None
+    elif catalog_name in {"europa", "hdx"}:
+        effective_queries[catalog_name] = concept_query
+        datasets, total = _ckan_search(concept_query, catalog_name, limit)
+    elif catalog_name == "nasa":
+        effective_queries[catalog_name] = concept_query
+        datasets, total = _nasa_search(concept_query, limit)
+        datasets.extend(_space_references(query))
+    elif catalog_name == "socrata":
         url = "https://api.us.socrata.com/api/catalog/v1?" + urllib.parse.urlencode(
             {"q": query, "limit": int(limit), "only": "datasets"}
         )
@@ -691,7 +1047,7 @@ def search_sources(query: str, catalog_name: str = "socrata", limit: int = 12) -
                 scored.append((score, item))
         for _, item in sorted(scored, key=lambda pair: (-pair[0], str(pair[1].get("id"))))[:limit]:
             identity = item.get("id", "")
-            if not re.fullmatch(r"[A-Za-z0-9_.-]+", identity):
+            if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", identity):
                 continue
             datasets.append(
                 {
@@ -717,14 +1073,26 @@ def search_sources(query: str, catalog_name: str = "socrata", limit: int = 12) -
         total = len(scored)
     else:
         raise SourceError(
-            "Choose socrata or worldbank for built-in public catalog search; other repositories can use their HTTPS CSV/JSON API"
+            "Choose auto, socrata, worldbank, europa, hdx or nasa for discovery; other repositories can use their documented public HTTPS table API"
         )
+    datasets = list({(item.get("provider", ""), item["id"]): item for item in datasets}.values())
+    for dataset in datasets:
+        dataset.setdefault("downloadable", bool(dataset.get("config")))
+        dataset.setdefault("data_kind", "tabular")
+        dataset.setdefault("limitations", [])
+        dataset["relevance"] = _relevance(query, dataset)
+    datasets.sort(key=lambda item: (-item["relevance"]["score"], item["title"]))
+    datasets = datasets[:limit]
     return {
         "query": query,
         "catalog": catalog_name,
         "datasets": datasets,
         "total_matches": total,
-        "warnings": [
+        "catalogs_searched": searched,
+        "effective_queries": effective_queries,
+        "warnings": extra_warnings
+        + [
+            "Long satellite/region questions are broadened to satellite orbit in domain catalogs; effective_queries records the exact query used. Related collections are not substituted for historical pass events.",
             "Search results are candidate sources, not proof that they measure your requested concept. Check units, geography, time coverage, availability times and license.",
             "A permit, inspection or venue count is not a sales series. Do not silently substitute proxies. Private merch/shop sales normally require the owner's export or authorized API key.",
             "Search/fetch requests run from this local app to the chosen catalog/provider. No application-operator service receives your query, data or keys.",

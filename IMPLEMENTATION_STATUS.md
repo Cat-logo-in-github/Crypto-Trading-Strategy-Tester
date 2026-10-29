@@ -1,6 +1,6 @@
-# Implementation status - v0.2
+# Implementation status - v0.3
 
-This describes the local v0.2 implementation and configured release workflows. The user's original ZIP was audited without downloading a replacement repository. Original source remains under `legacy/`; its local `.env`, logs, downloaded datasets, Git history and development environment are excluded from the release.
+This describes the local v0.3 student project for historical strategy research and simulated paper trading. It sends no real orders and does not promise a scientifically conclusive trading edge. The user's original ZIP was audited without downloading a replacement repository. Original source remains under `legacy/`; its local `.env`, logs, downloaded datasets, Git history and development environment are excluded from the release.
 
 Exact final test counts, artifact hashes and clean-extraction results belong to the delivered verification report. The final archive check is a release step, not something implied by code existing or a workflow being configured.
 
@@ -10,17 +10,20 @@ Exact final test counts, artifact hashes and clean-extraction results belong to 
 | --- | --- | --- |
 | Windows desktop download | Implemented; local portable/launcher checks executed | Extract the separate Windows ZIP and open `Hypothesis Lab.exe`; private official CPython runtime, no system Python or terminal needed for visitors |
 | Local research application | Implemented | Loopback Python service and bundled browser UI; no mandatory account, hosted app backend, telemetry or paid service |
-| General data discovery | Implemented | Question-to-measurement planning, public Socrata/World Bank catalog search, custom documented HTTPS CSV/JSON and local imports; candidates are not guaranteed exact data |
-| Alternative data | Implemented | Arbitrary supported numeric/boolean fields, fixed categorical hashing, explicit text measurements, small flattened JSON records and causal transformations |
+| General data discovery | Implemented | Bounded catalog discovery across Socrata, World Bank, NASA CMR, European and humanitarian catalogs; semantic direct/related/weak ranking, explicit metadata/binary-reference limits and custom HTTPS APIs |
+| Alternative data | Implemented | CSV/TSV/JSON/NDJSON/GeoJSON Point/properties, quality reports, suggested/composite dates, entity filters, numeric/boolean fields, categorical hashing, explicit text equality/measurements and causal aggregation/transformations |
 | Time and publication semantics | Implemented and covered by tests | Observation/publication separation, revisions, explicit timezone/lag assumptions and shared observation expiry in rule/model orchestration |
 | Rule strategies | Implemented | AND/OR conditions over market indicators or mapped `event:field` observations, supported sentence patterns, visual controls and editable JSON |
+| Guided algorithm setup | Implemented | Idea → Data → Signal → Period → Run; separate entry/exit conditions, bounded causal expression chains, geospatial conditions, preview and optional user-LLM draft; no executable generated Python |
+| Historical duration | Implemented | UTC start/end dates or recent-bar windows, completed-bar eligibility, earlier indicator warmup and accounting reset at the active window; trained models trade in the held-out subperiod |
 | Core supervised training | Implemented and covered by tests | CPU logistic probability or ridge numeric baseline on named inputs and an independently selected external/market target; chronological splitting/purging and training-only scaling |
 | Pretrained numeric models | Implemented and covered by tests | Validated JSON logistic/ridge/linear parameters, explicit input mapping/output policy, declared training-provenance checks; no pickle/joblib/Python execution |
 | Optional ONNX | Integration implemented; native local execution not verified | Optional CPU numeric-matrix adapter, small uploads or explicitly selected local graph/weights; separate advanced Python setup, not bundled in the portable Windows edition |
 | User model/LLM services | Implemented and covered by bounded/mocked/local-endpoint tests | User-operated tabular or OpenAI-compatible endpoint, optional strict data-plan proposal, JSON numeric output, defined text signals or reported token counts; remote HTTPS requires an explicit choice |
 | Inference-to-trade policy | Implemented | Explicit output/comparison/threshold, target weight or cash buy, false-condition hold/exit; every intent uses shared next-open execution |
 | Market/portfolio inspection | Implemented | Dark OHLC candles, buy/sell markers, range/zoom, all-fill pagination/filtering, linked cash/position/cost inspection, equity/drawdown/exposure and inference/target/market diagnostics |
-| Execution and metrics | Implemented and covered by independent expectations | One long-only fractional spot instrument, cash limits, fees/adverse slippage, next-open fills, order states, marked portfolio ledger and compatible buy-and-hold |
+| Execution and metrics | Implemented and covered by independent expectations | One long-only fractional spot instrument, cash limits, proportional/fixed commission, full spread/adverse slippage, data/processing/submit delays, eligible-open fills, order clock events and marked accounting |
+| Dated cost scenarios | Implemented | Official 2026 venue fee snapshots with scope and primary links; spread, slippage, processing and hardware/network timing assumptions remain separately labeled and editable |
 | Session/privacy model | Implemented | UI runs are in RAM by default; up to 20 recent runs with a 50 MB older-record eviction budget, retaining the latest record; explicit local save/export choices |
 | Credentials | Implemented | Generic source/model keys are separate session inputs and excluded from research exports; the original Alpha Vantage test retains a separately consented local-key file |
 | Exploration/RL | Bounded/experimental | Original market-feature subset search and a small Python tabular-Q environment/example; no universal feature search, deep-RL UI or performance claim |
@@ -32,7 +35,7 @@ A measurement such as sales, traffic, city growth, shipping activity or defined 
 
 The built-in multi-domain demonstrations are explicitly synthetic: ice-cream/merch/rubber-duck sales, traffic, urban growth, shipping, weather, moon phase and day type. They establish software behavior, not a real dataset relationship. Private commercial sales require an owner's authorized export or API. A permit, shop location or inspection count is a different proxy and is not silently treated as actual sales.
 
-CSV/JSON mapping supports publication columns, conservative acquisition-time availability or an explicit assumed historical lag. Numeric/boolean inputs, fixed categorical buckets, defined text count/contains/length features and trailing lag/difference/proportional-change/mean/sum/z-score transforms are supported. Raw multimodal inputs and arbitrary frameworks require user preprocessing or a compatible inference endpoint.
+Mapping supports publication columns, conservative acquisition-time availability or an explicit assumed historical lag. Numeric/boolean inputs, fixed categorical buckets, defined text equality/count/contains/length features and trailing lag/difference/proportional-change/mean/sum/z-score transforms are supported. Raw multimodal inputs and arbitrary frameworks require user preprocessing or a compatible inference endpoint. Satellite metadata/current orbital references are ranked above geographic-only alternatives, but are never represented as historical satellite-pass events without appropriate extraction/history.
 
 ## Evidence actually obtained
 
@@ -48,6 +51,8 @@ The earlier rule/model expiry discrepancy was independently reproduced and corre
 
 The delivered report records the current full-suite results rather than retaining the earlier v0.1 count. Ruff, formatting, typing, distribution/static builds and clean-copy checks are release checks; final results are reported only after execution.
 
+Version 0.3 adds an independent [engine audit](docs/engine-audit-2026.md), including corrected source-name collisions, explicit active-window/once-state behavior, delayed-order eligibility, tiny fractional fills, fixed-fee constraints and undefined risk metrics. New signal tests exercise hand-calculated trailing math, missingness, geographic conditions, prefix causality, rejected executable expressions, algorithm planning and session-only HTTP previews. The latest GitHub cooldown regression distinguishes no prior request from a real time-zero request; it was reproduced before correction.
+
 ### Real keyless source probes
 
 The source work obtained real responses for three deliberately small probes:
@@ -55,6 +60,7 @@ The source work obtained real responses for three deliberately small probes:
 - Public Socrata traffic discovery/download: three Calgary rows.
 - World Bank USA urban-growth indicator: three rows.
 - IMF PortWatch daily port activity: ten rows.
+- NASA CMR satellite/orbit metadata, European traffic catalog and HDX population queries: verified bounded implemented catalog responses, with downloadable supported tables distinguished from imagery/HTML/large binary references.
 
 These verify that those selected public requests worked at the time of testing. They do not establish unrestricted access, guaranteed future uptime, full historical coverage or redistribution rights for every dataset. Other provider failures and key-handling paths are exercised with controlled responses; no credentialed commercial entitlement is claimed as verified.
 
@@ -80,7 +86,7 @@ New browser runs default to session memory. The shared save checkbox is an expli
 
 Generic source/model credentials are not research fields, export keys or an app-operator account. Localhost model inference is the default; remote provider use requires an explicit choice and remains subject to that provider's own retention, quotas and charges. The legacy Alpha Vantage credential-file workflow is a separately consented exception: Windows DPAPI, or owner-restricted plaintext on other platforms. A separate Windows DPAPI roundtrip was executed previously.
 
-Model weights stay under user control. Uploaded numeric JSON can be exported intentionally; local ONNX paths require the original files when rerun, and endpoint replay requires the original service and any newly supplied session key. Historical LLM replay happens now, can include future pretraining knowledge and does not establish historic model availability. Reported inference latency is recorded rather than applied to fills. Token counts are used only when reported by the endpoint.
+Model weights stay under user control. Uploaded numeric JSON can be exported intentionally; local ONNX paths require the original files when rerun, and endpoint replay requires the original service and any newly supplied session key. Historical LLM replay happens now, can include future pretraining knowledge and does not establish historic model availability. Measured current inference duration is replayed into order readiness by default, with an explicit disable option; it is a present-day timing scenario, not proof of historical hardware/model availability. Token counts are used only when reported by the endpoint.
 
 ## Remaining limits and final-release boundary
 
@@ -97,4 +103,4 @@ Model weights stay under user control. Uploaded numeric JSON can be exported int
 
 Windows visitors download **Hypothesis-Lab-Windows.zip**, extract the complete folder and open **Hypothesis Lab.exe**. No system Python or terminal is required. Developers can install source with `python -m pip install -e .` and launch `python -m hypothesis_lab`.
 
-The owner uploads the source contents (including `.github`) to the repository, selects **Settings > Pages > GitHub Actions**, then publishes a normal versioned release such as **v0.2.0**. The workflow attaches stable source/Windows ZIP names and checksum assets when its jobs finish. See [release instructions](docs/releasing.md), [research walkthrough](docs/research-workflow.md) and [architecture](docs/architecture.md).
+The owner uploads the extracted source contents (including `.github`) to the repository, selects **Settings > Pages > GitHub Actions**, then publishes a normal versioned release such as **v0.3.0** targeting the updated commit. The workflow attaches stable source/Windows ZIP names and checksum assets when its jobs finish; a normal branch push intentionally skips publication. See [release instructions](docs/releasing.md), [Signal Studio](docs/signal-studio.md), [research walkthrough](docs/research-workflow.md) and [architecture](docs/architecture.md).

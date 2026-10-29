@@ -52,9 +52,11 @@ def _flatten(value: dict, prefix: str = "", depth: int = 0) -> dict:
 def read_records(content: str, format_name: str = "csv") -> list[dict[str, Any]]:
     if not isinstance(content, str) or not content.strip() or len(content.encode()) > 4_000_000:
         raise ValueError("Choose a nonempty CSV/JSON table under 4 MB")
-    if format_name == "csv":
+    if format_name in {"csv", "tsv"}:
         csv.field_size_limit(4_000_000)
-        reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff")))
+        reader = csv.DictReader(
+            io.StringIO(content.lstrip("\ufeff")), delimiter="\t" if format_name == "tsv" else ","
+        )
         if (
             not reader.fieldnames
             or any(not name.strip() for name in reader.fieldnames)
@@ -68,7 +70,7 @@ def read_records(content: str, format_name: str = "csv") -> list[dict[str, Any]]
             rows.append(item)
             if len(rows) > MAX_ROWS:
                 raise ValueError("Use at most 20,000 observations")
-    elif format_name == "json":
+    elif format_name in {"json", "ndjson", "geojson"}:
 
         def invalid(value):
             raise ValueError("JSON cannot contain NaN or infinity")
@@ -81,7 +83,58 @@ def read_records(content: str, format_name: str = "csv") -> list[dict[str, Any]]
                 result[key] = value
             return result
 
-        raw = json.loads(content, parse_constant=invalid, object_pairs_hook=unique_object)
+        if format_name == "ndjson":
+            lines = [line for line in content.splitlines() if line.strip()]
+            if len(lines) > MAX_ROWS:
+                raise ValueError("Use at most 20,000 observations")
+            raw = [
+                json.loads(line, parse_constant=invalid, object_pairs_hook=unique_object)
+                for line in lines
+            ]
+        else:
+            raw = json.loads(content, parse_constant=invalid, object_pairs_hook=unique_object)
+        if isinstance(raw, dict) and raw.get("type") == "FeatureCollection":
+            features = raw.get("features")
+            if not isinstance(features, list) or not 1 <= len(features) <= MAX_ROWS:
+                raise ValueError("GeoJSON requires one to 20,000 features")
+            records = []
+            for feature in features:
+                if (
+                    not isinstance(feature, dict)
+                    or feature.get("type") != "Feature"
+                    or not isinstance(feature.get("properties"), dict)
+                ):
+                    raise ValueError("GeoJSON features need an object of properties")
+                row = dict(feature["properties"])
+                if any(name in row for name in ("_geometry_type", "_longitude", "_latitude")):
+                    raise ValueError("GeoJSON properties collide with reserved geometry columns")
+                geometry = feature.get("geometry")
+                if geometry is not None:
+                    if not isinstance(geometry, dict) or not isinstance(geometry.get("type"), str):
+                        raise ValueError("Invalid GeoJSON geometry")
+                    row["_geometry_type"] = geometry["type"]
+                    if geometry["type"] == "Point":
+                        coordinates = geometry.get("coordinates")
+                        if (
+                            not isinstance(coordinates, list)
+                            or len(coordinates) not in {2, 3}
+                            or any(
+                                isinstance(v, bool)
+                                or not isinstance(v, (int, float))
+                                or not math.isfinite(v)
+                                for v in coordinates
+                            )
+                        ):
+                            raise ValueError(
+                                "GeoJSON Point coordinates must be finite numeric longitude/latitude"
+                            )
+                        if not -180 <= coordinates[0] <= 180 or not -90 <= coordinates[1] <= 90:
+                            raise ValueError("GeoJSON Point longitude/latitude are out of range")
+                        row.update(_longitude=coordinates[0], _latitude=coordinates[1])
+                records.append(row)
+            raw = records
+        elif format_name == "geojson":
+            raise ValueError("GeoJSON import requires a FeatureCollection")
         if isinstance(raw, dict):
             raw = next(
                 (raw[k] for k in ("records", "data", "items") if isinstance(raw.get(k), list)), None
@@ -94,7 +147,9 @@ def read_records(content: str, format_name: str = "csv") -> list[dict[str, Any]]
             raise ValueError("Use one to 20,000 observations")
         rows = [_flatten(row) for row in raw]
     else:
-        raise ValueError("Supported tabular input formats are csv and json")
+        raise ValueError(
+            "Supported inputs are csv, tsv, json, ndjson and GeoJSON FeatureCollection; binary/raster formats need an explicit external extraction"
+        )
     columns = {key for row in rows for key in row}
     if not rows or not 1 <= len(columns) <= MAX_COLUMNS:
         raise ValueError("Use a nonempty table with at most 100 columns")
@@ -115,10 +170,182 @@ def _numeric(value: Any) -> float | None:
     return number
 
 
+DATE_FORMATS = {
+    "date_dmy": ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d %b %Y", "%d-%b-%Y"),
+    "date_mdy": ("%m/%d/%Y", "%m-%d-%Y", "%b %d, %Y"),
+    "yyyymmdd": ("%Y%m%d",),
+    "year": ("%Y",),
+    "year_month": ("%Y-%m", "%Y/%m"),
+}
+
+
+def _date_parse(value: str, format_name: str) -> datetime:
+    for pattern in DATE_FORMATS[format_name]:
+        try:
+            return datetime.strptime(value, pattern)
+        except ValueError:
+            pass
+    raise ValueError(f"Date does not match the selected {format_name} format")
+
+
+def _time_candidates(rows: list[dict], columns: list[str]) -> list[dict]:
+    result = []
+    for name in columns:
+        sample = [row[name] for row in rows[:200] if row.get(name) not in (None, "")]
+        if not sample:
+            continue
+        hint = bool(
+            re.search(r"date|time|year|month|epoch|observ|publish|release|acquir", name, re.I)
+        )
+        formats = []
+        if all(isinstance(v, str) and len(v) >= 10 for v in sample):
+            try:
+                for value in sample:
+                    datetime.fromisoformat(value.replace("Z", "+00:00"))
+                formats.append("iso")
+            except ValueError:
+                pass
+        if hint or all(isinstance(v, str) and bool(re.search(r"[/.-]", v)) for v in sample):
+            for format_name in DATE_FORMATS:
+                try:
+                    for value in sample:
+                        _date_parse(str(value), format_name)
+                    formats.append(format_name)
+                except ValueError:
+                    pass
+        if hint and not formats:
+            for format_name, divisor in (("unix_seconds", 1), ("unix_milliseconds", 1000)):
+                try:
+                    years = [datetime.fromtimestamp(float(v) / divisor, UTC).year for v in sample]
+                    if all(not isinstance(v, bool) for v in sample) and all(
+                        1990 <= year <= 2100 for year in years
+                    ):
+                        formats.append(format_name)
+                except (ValueError, TypeError, OverflowError, OSError):
+                    pass
+        if formats:
+            result.append(
+                {
+                    "column": name,
+                    "formats": formats,
+                    "ambiguous": len(formats) > 1,
+                    "reason": "Matches sampled values; verify units, timezone and period boundary.",
+                }
+            )
+    return result
+
+
+def _parts(mapping: dict, name: str, columns: list[str]) -> dict:
+    value = mapping.get(name, {})
+    if not isinstance(value, dict) or (
+        value and ("year" not in value or set(value) - {"year", "month", "day"})
+    ):
+        raise ValueError("Composite time parts require year and optional month/day column names")
+    if "day" in value and "month" not in value:
+        raise ValueError("Composite day requires a month column")
+    if any(not isinstance(column, str) or column not in columns for column in value.values()):
+        raise ValueError("Composite time parts must name existing columns")
+    return value
+
+
+def _row_time(row: dict, mapping: dict, available: bool = False) -> datetime:
+    prefix = "available_at" if available else "timestamp"
+    parts = mapping.get(prefix + "_parts", {})
+    coarse = ""
+    if parts:
+        components = {}
+        for part, column in parts.items():
+            raw = row.get(column)
+            if part == "month" and isinstance(raw, str):
+                month_names = "january february march april may june july august september october november december".split()
+                normalized = raw.strip().casefold().rstrip(".")
+                raw = next(
+                    (
+                        i
+                        for i, name in enumerate(month_names, 1)
+                        if normalized in {name, name[:3]}
+                        or (name == "september" and normalized == "sept")
+                    ),
+                    raw,
+                )
+            try:
+                if raw is None:
+                    raise ValueError()
+                number = float(raw)
+                if isinstance(raw, bool) or not math.isfinite(number) or not number.is_integer():
+                    raise ValueError()
+                components[part] = int(number)
+            except (ValueError, TypeError, OverflowError):
+                raise ValueError(
+                    "Calendar parts need integer year/day and a numeric or English month name"
+                ) from None
+        value = datetime(
+            components["year"], components.get("month", 1), components.get("day", 1)
+        ).isoformat()
+        stamp = _time(value, mapping.get("timezone", ""))
+        coarse = "year" if "month" not in parts else "month" if "day" not in parts else ""
+    else:
+        column = mapping.get(
+            "available_at_column" if available else "observed_at_column",
+            mapping.get("timestamp_column", "timestamp"),
+        )
+        if column not in row:
+            raise ValueError("The selected timestamp column is missing from a row")
+        format_name = mapping.get("available_at_format" if available else "timestamp_format", "iso")
+        stamp = _time(row[column], mapping.get("timezone", ""), format_name)
+        coarse = "year" if format_name == "year" else "month" if format_name == "year_month" else ""
+    if coarse and mapping.get("period_boundary", "end") == "end":
+        # Complete the local calendar period before normalizing to UTC.
+        zone = mapping.get("timezone", "")
+        offset = timedelta()
+        if isinstance(zone, str) and re.fullmatch(r"[+-]\d{2}:\d{2}", zone):
+            hours, minutes = map(int, zone[1:].split(":"))
+            offset = (1 if zone[0] == "+" else -1) * timedelta(hours=hours, minutes=minutes)
+        local = stamp + offset
+        next_month = 1 if coarse == "year" or local.month == 12 else local.month + 1
+        next_year = local.year + (coarse == "year" or local.month == 12)
+        stamp = _time(datetime(next_year, next_month, 1).isoformat(), zone)
+    return stamp
+
+
+def _entities(rows: list[dict], columns: list[str]) -> list[dict]:
+    result = []
+    for column in columns:
+        if not re.search(
+            r"(^|[_. ])(country|state|city|region|entity|station|airport|store|shop|product|sku|port|location|site|symbol|ticker|name|object|satellite)([_. ]|$)|^(country|state|city|entity|station|airport|store|shop|product|sku|port|location|site|symbol|ticker|object|satellite)_?(id|name|code)?$",
+            column,
+            re.I,
+        ):
+            continue
+        values = list(
+            dict.fromkeys(
+                row.get(column)
+                for row in rows
+                if isinstance(row.get(column), (str, int, float)) and row.get(column) != ""
+            )
+        )
+        if 1 < len(values) <= 1000:
+            result.append(
+                {
+                    "column": column,
+                    "values": values[:50],
+                    "count": len(values),
+                    "truncated": len(values) > 50,
+                }
+            )
+    return result
+
+
 def inspect_dataset(content: str, format_name: str = "csv", mapping: dict | None = None) -> dict:
     rows = read_records(content, format_name)
     columns = list(dict.fromkeys(key for row in rows for key in row))
+    if mapping is not None and not isinstance(mapping, dict):
+        raise ValueError("Feature mapping must be an object")
     config = dict(mapping or {})
+    time_candidates = _time_candidates(rows, columns)
+    issues, assumptions, confirmations = [], [], []
+    timestamp_parts = _parts(config, "timestamp_parts", columns)
+    available_parts = _parts(config, "available_at_parts", columns)
     observed = config.get("observed_at_column", config.get("timestamp_column"))
     if observed is None:
         observed = next(
@@ -127,7 +354,7 @@ def inspect_dataset(content: str, format_name: str = "csv", mapping: dict | None
                 for name in ("observed_at", "timestamp", "date", "time", "datetime")
                 if name in columns
             ),
-            "",
+            next((item["column"] for item in time_candidates), ""),
         )
     available = config.get(
         "available_at_column",
@@ -136,11 +363,38 @@ def inspect_dataset(content: str, format_name: str = "csv", mapping: dict | None
             "",
         ),
     )
-    mode = config.get("availability_mode", "column" if available else "acquired")
+    if timestamp_parts:
+        observed = ""
+    mode = config.get("availability_mode", "column" if available or available_parts else "acquired")
     if mode not in {"column", "lag", "acquired"}:
         raise ValueError("Availability mode must be column, lag or acquired")
     numeric, categories = [], []
-    ignored = {observed, available}
+    entity = config.get("entity_column", "")
+    if not isinstance(entity, str) or entity and entity not in columns:
+        raise ValueError("Choose an existing entity column")
+    selected_filter = config.get("filter")
+    if selected_filter is not None:
+        if (
+            not isinstance(selected_filter, dict)
+            or selected_filter.get("column") not in columns
+            or "equals" not in selected_filter
+            or isinstance(selected_filter["equals"], (dict, list))
+        ):
+            raise ValueError("Entity filter needs an existing column and one exact equals value")
+        entity = selected_filter["column"]
+    ignored = {observed, available, entity, *timestamp_parts.values(), *available_parts.values()}
+    if observed and "timestamp_format" not in config:
+        candidate = next((item for item in time_candidates if item["column"] == observed), None)
+        if candidate and len(candidate["formats"]) == 1:
+            config["timestamp_format"] = candidate["formats"][0]
+            if config["timestamp_format"] != "iso":
+                assumptions.append(
+                    f"Observation time was recognized as {config['timestamp_format']}; verify this mapping."
+                )
+    if available and "available_at_format" not in config:
+        candidate = next((item for item in time_candidates if item["column"] == available), None)
+        if candidate and len(candidate["formats"]) == 1:
+            config["available_at_format"] = candidate["formats"][0]
     long_field = config.get("series_column")
     long_value = config.get("value_column")
     if not long_field and {"field", "value"}.issubset(columns):
@@ -170,6 +424,15 @@ def inspect_dataset(content: str, format_name: str = "csv", mapping: dict | None
     categorical = config.get("categorical_columns", [])
     if not isinstance(fields, list) or not isinstance(categorical, list):
         raise ValueError("Select at least one numeric, categorical or text-derived feature")
+    if any(not isinstance(name, str) for name in fields + categorical):
+        raise ValueError("Feature selections must be column-name strings")
+    removed = [name for name in fields + categorical if isinstance(name, str) and name in ignored]
+    if removed:
+        assumptions.append(
+            "Removed time/entity keys from feature selections: " + ", ".join(dict.fromkeys(removed))
+        )
+        fields = [name for name in fields if name not in ignored]
+        categorical = [name for name in categorical if name not in ignored]
     if any(name not in numeric for name in fields) or any(
         name not in categories for name in categorical
     ):
@@ -179,16 +442,30 @@ def inspect_dataset(content: str, format_name: str = "csv", mapping: dict | None
     text_features = config.get("text_features", [])
     if not isinstance(text_features, list) or len(text_features) > 8:
         raise ValueError("Use at most eight explicit text feature definitions")
+    if any(
+        isinstance(item, dict)
+        and isinstance(item.get("column"), str)
+        and item.get("column") in ignored
+        for item in text_features
+    ):
+        assumptions.append("Removed text transformations that use selected time/entity keys.")
+    text_features = [
+        item
+        for item in text_features
+        if not isinstance(item, dict)
+        or not isinstance(item.get("column"), str)
+        or item.get("column") not in ignored
+    ]
     for item in text_features:
         if (
             not isinstance(item, dict)
             or item.get("column") not in categories
-            or item.get("operation") not in {"count", "contains", "length"}
+            or item.get("operation") not in {"count", "contains", "length", "equals"}
             or not isinstance(item.get("name"), str)
             or not item.get("name", "").strip()
         ):
             raise ValueError(
-                "Text features require a text column, name and count/contains/length operation"
+                "Text features require a text column, name and count/contains/length/equals operation"
             )
         if item["operation"] != "length" and not str(item.get("needle", "")):
             raise ValueError("Choose a nonempty phrase to count or match")
@@ -201,6 +478,39 @@ def inspect_dataset(content: str, format_name: str = "csv", mapping: dict | None
         raise ValueError("Encoded feature names must be distinct")
     if len(generated) > 32 or any(name.startswith("market.") for name in generated):
         raise ValueError("Select at most 32 encoded features; market.* is a reserved namespace")
+    if config.get("period_boundary", "end") not in {"start", "end"}:
+        raise ValueError("Calendar period boundary must be start or end")
+    aggregation = config.get("aggregation")
+    if aggregation is not None:
+        if (
+            not isinstance(aggregation, dict)
+            or aggregation.get("frequency") not in {"day", "month"}
+            or aggregation.get("operation") not in {"count", "sum", "mean"}
+        ):
+            raise ValueError("Aggregation needs day/month frequency and count/sum/mean operation")
+        selected = aggregation.get("fields", generated)
+        if (
+            not isinstance(selected, list)
+            or any(name not in generated for name in selected)
+            or len(set(selected)) != len(selected)
+        ):
+            raise ValueError("Aggregate fields must be distinct selected feature names")
+        if aggregation["operation"] != "count" and not selected:
+            raise ValueError(
+                "Sum/mean aggregation requires selected numeric or text-derived features"
+            )
+        aggregation = {**aggregation, "fields": selected}
+        generated = (
+            ["event_count"]
+            if aggregation["operation"] == "count"
+            else [
+                f"{name}__{aggregation['operation']}_{aggregation['frequency']}"
+                for name in selected
+            ]
+        )
+        assumptions.append(
+            "Explicit aggregation uses only completed UTC buckets, becomes available after every included row is published, and leaves missing-value sums/means missing. Empty buckets are not invented."
+        )
     config.update(
         observed_at_column=observed,
         timestamp_column=observed,
@@ -208,6 +518,11 @@ def inspect_dataset(content: str, format_name: str = "csv", mapping: dict | None
         availability_mode=mode,
         field_columns=fields,
         categorical_columns=categorical,
+        text_features=text_features,
+        entity_column=entity,
+        timestamp_parts=timestamp_parts,
+        available_at_parts=available_parts,
+        period_boundary=config.get("period_boundary", "end"),
         acquired_at=(config.get("acquired_at") or datetime.now(UTC).isoformat())
         if mode == "acquired"
         else config.get("acquired_at"),
@@ -216,8 +531,10 @@ def inspect_dataset(content: str, format_name: str = "csv", mapping: dict | None
     )
     if long_field:
         config.update(series_column=long_field, value_column=long_value)
-    warnings = []
-    if not observed:
+    if aggregation is not None:
+        config["aggregation"] = aggregation
+    warnings = list(assumptions)
+    if not observed and not timestamp_parts:
         warnings.append("Choose an observation timestamp column before running the experiment.")
     if mode == "acquired":
         warnings.append(
@@ -237,6 +554,81 @@ def inspect_dataset(content: str, format_name: str = "csv", mapping: dict | None
         warnings.append(
             "Categorical inputs use eight fixed SHA-256 buckets per field. No future vocabulary is learned; collisions are possible."
         )
+    entity_candidates = _entities(rows, columns)
+    if entity_candidates and not selected_filter and aggregation is None:
+        confirmations.append(
+            "This table contains several entities. Select one exact entity or explicitly aggregate before combining coincident observations."
+        )
+    if config.get("timezone", "") == "":
+        confirmations.append(
+            "Confirm a timezone for date-only, common-format or composite calendar timestamps. No timezone is silently assigned."
+        )
+    if any(item["ambiguous"] for item in time_candidates):
+        issues.append(
+            "Some dates are ambiguous between day/month and month/day; choose the format explicitly."
+        )
+    missing = sum(row.get(name) in (None, "") for row in rows for name in columns)
+    duplicate_rows = len(rows) - len(
+        {json.dumps(row, sort_keys=True, ensure_ascii=True) for row in rows}
+    )
+    if missing:
+        issues.append(f"{missing} cells are missing; missing values remain missing.")
+    if duplicate_rows:
+        issues.append(f"{duplicate_rows} duplicate rows; no rows are silently discarded.")
+    kind = (
+        "long"
+        if long_field
+        else "entity_panel"
+        if entity_candidates
+        else "geospatial"
+        if "_geometry_type" in columns
+        else "time_series"
+        if observed or timestamp_parts
+        else "static"
+    )
+    if categories and not numeric:
+        kind = "event_log" if observed or timestamp_parts else kind
+    if "_geometry_type" in columns:
+        assumptions.append(
+            "GeoJSON properties are tabular; Point coordinates are exposed as _longitude/_latitude. Polygon/raster geometry is not converted to centroids, areas or satellite passes."
+        )
+        warnings.append(assumptions[-1])
+    suggestions = []
+    proposed = {**config, "timezone": config.get("timezone") or "UTC"}
+    composite = {
+        part: next((name for name in columns if name.casefold() == part), "")
+        for part in ("year", "month", "day")
+    }
+    if composite["year"] and (not observed or config.get("timestamp_format") == "year"):
+        proposed.update(
+            timestamp_parts={part: name for part, name in composite.items() if name},
+            observed_at_column="",
+            timestamp_column="",
+            period_boundary="end",
+        )
+    if observed or proposed.get("timestamp_parts"):
+        suggestions.append(
+            {
+                "label": "Use the recognized time and measurements",
+                "mapping": proposed,
+                "reason": "Review the selected columns and confirm UTC if dates have no zone. Year/month measurements are dated at period completion by default; publication remains independently acquired/column/lag.",
+            }
+        )
+    if observed and categories:
+        count_mapping = {
+            **proposed,
+            "field_columns": [],
+            "categorical_columns": [],
+            "text_features": [],
+            "aggregation": {"frequency": "day", "operation": "count", "fields": []},
+        }
+        suggestions.append(
+            {
+                "label": "Count completed daily events",
+                "mapping": count_mapping,
+                "reason": "Each input row is one event only if you confirm that definition; all entities are counted unless an exact filter is selected.",
+            }
+        )
     return {
         "format": format_name,
         "columns": columns,
@@ -250,6 +642,20 @@ def inspect_dataset(content: str, format_name: str = "csv", mapping: dict | None
         "mapping": config,
         "generated_fields": generated,
         "warnings": warnings,
+        "quality": {
+            "rows": len(rows),
+            "missing_cells": missing,
+            "duplicate_rows": duplicate_rows,
+            "time_candidates": time_candidates,
+            "issues": issues,
+        },
+        "interpretation": {
+            "kind": kind,
+            "assumptions": assumptions,
+            "requires_confirmation": confirmations,
+            "entity_candidates": entity_candidates,
+        },
+        "suggestions": suggestions,
     }
 
 
@@ -266,13 +672,26 @@ def _time(value: Any, configured_timezone: str, format_name: str = "iso") -> dat
             )
         except (TypeError, ValueError, OverflowError, OSError):
             raise ValueError("Invalid timestamp for the explicitly chosen Unix time unit") from None
-    if format_name != "iso":
-        raise ValueError("Timestamp format must be iso, unix_seconds or unix_milliseconds")
+    if format_name != "iso" and format_name not in DATE_FORMATS:
+        raise ValueError("Choose ISO, an explicit Unix unit or a supported calendar date format")
     if not isinstance(value, str):
-        raise ValueError(
-            "Observation/availability timestamps must be ISO strings; convert Unix timestamps explicitly"
-        )
-    stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if (
+            format_name in DATE_FORMATS
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and float(value).is_integer()
+        ):
+            value = str(int(value))
+        else:
+            raise ValueError(
+                "Observation/availability timestamps must be ISO strings; convert Unix timestamps explicitly"
+            )
+    stamp = (
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if format_name == "iso"
+        else _date_parse(value, format_name)
+    )
     if stamp.tzinfo is None:
         if configured_timezone == "UTC":
             stamp = stamp.replace(tzinfo=UTC)
@@ -305,24 +724,26 @@ def prepare_dataset(
     config = info["mapping"]
     if not info["generated_fields"]:
         raise ValueError("Select at least one numeric, categorical or text-derived feature")
-    if not config["observed_at_column"]:
+    if not config["observed_at_column"] and not config.get("timestamp_parts"):
         raise ValueError("Choose an observation timestamp column")
-    if config["availability_mode"] == "column" and not config["available_at_column"]:
+    if (
+        config["availability_mode"] == "column"
+        and not config["available_at_column"]
+        and not config.get("available_at_parts")
+    ):
         raise ValueError("Choose a publication/availability column")
     rows = read_records(content, format_name)
+    if config.get("filter"):
+        condition = config["filter"]
+        rows = [row for row in rows if row.get(condition["column"]) == condition["equals"]]
+        if not rows:
+            raise ValueError("No observations match the exact entity filter")
+    info["quality"]["selected_rows"] = len(rows)
     observations, keys = [], set()
     for row in rows:
-        observed = _time(
-            row[config["observed_at_column"]],
-            config["timezone"],
-            config.get("timestamp_format", "iso"),
-        )
+        observed = _row_time(row, config)
         if config["availability_mode"] == "column":
-            available = _time(
-                row[config["available_at_column"]],
-                config["timezone"],
-                config.get("available_at_format", "iso"),
-            )
+            available = _row_time(row, config, available=True)
         elif config["availability_mode"] == "lag":
             available = observed + timedelta(hours=config["availability_lag_hours"])
         else:
@@ -364,31 +785,78 @@ def prepare_dataset(
                         if item["operation"] == "length"
                         else text.count(needle)
                         if item["operation"] == "count"
+                        else text == needle
+                        if item["operation"] == "equals"
                         else needle in text
                     )
                 )
-        if not values:
+        if not values and config.get("aggregation", {}).get("operation") != "count":
             continue
         key = (observed, available, tuple(sorted(values)))
-        if key in keys:
+        if key in keys and not config.get("aggregation"):
             raise ValueError(
                 "Duplicate observation/revision keys are ambiguous; aggregate or disambiguate first"
             )
         keys.add(key)
         observations.append(Observation(observed, available, values))
+    if config.get("aggregation"):
+        aggregation = config["aggregation"]
+        groups: dict[datetime, list[Observation]] = {}
+        for item in observations:
+            start = item.observed_at.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1)
+            if aggregation["frequency"] == "month":
+                start = start.replace(day=1)
+                end = datetime(
+                    start.year + (start.month == 12),
+                    1 if start.month == 12 else start.month + 1,
+                    1,
+                    tzinfo=UTC,
+                )
+            groups.setdefault(end, []).append(item)
+        observations = []
+        for end, group in groups.items():
+            values = {"event_count": float(len(group))}
+            if aggregation["operation"] != "count":
+                values = {}
+                for field in aggregation["fields"]:
+                    raw = [item.values[field] for item in group if field in item.values]
+                    value = (
+                        None
+                        if not raw or any(v is None for v in raw)
+                        else sum(v for v in raw if v is not None)
+                    )
+                    if value is not None and aggregation["operation"] == "mean":
+                        value /= len(raw)
+                    if value is not None and not math.isfinite(value):
+                        raise ValueError(
+                            "Aggregate arithmetic exceeded finite numeric limits; rescale the source values"
+                        )
+                    values[f"{field}__{aggregation['operation']}_{aggregation['frequency']}"] = (
+                        value
+                    )
+            observations.append(
+                Observation(end, max(end, *(item.available_at for item in group)), values)
+            )
     return sorted(observations, key=lambda r: r.available_at), info
 
 
 def align_features(
-    bars: list[Bar], observations: list[Observation], info: dict, bar_seconds: float = 86400
+    bars: list[Bar],
+    observations: list[Observation],
+    info: dict,
+    bar_seconds: float = 86400,
+    decision_delay_seconds: float = 0.0,
 ) -> list[dict[str, float | None]]:
     """Linear sweep of publications, retaining the latest known revision by observation time."""
+    if not math.isfinite(decision_delay_seconds) or decision_delay_seconds < 0:
+        raise ValueError("Decision delay must be nonnegative and finite")
     fields = info["generated_fields"]
     age = info["mapping"]["max_age_hours"] * 3600
     published: dict[str, tuple[datetime, datetime, float | None]] = {}
     cursor, result = 0, []
     for index, bar in enumerate(bars):
-        when = bar.timestamp + timedelta(seconds=bar_seconds)
+        when = bar.timestamp + timedelta(seconds=bar_seconds + decision_delay_seconds)
         while cursor < len(observations) and observations[cursor].available_at <= when:
             item = observations[cursor]
             for name, value in item.values.items():
@@ -434,8 +902,14 @@ def market_from_dataset(content: str, format_name: str, mapping: dict) -> dict:
     if len(rows) > 5000:
         raise ValueError("Choose at most 5,000 market bars for the interactive workbench")
     time_column = mapping.get("timestamp_column", mapping.get("observed_at_column", "timestamp"))
+    parts = _parts(
+        mapping, "timestamp_parts", list(dict.fromkeys(key for row in rows for key in row))
+    )
     fields = {name: mapping.get(name, name) for name in ("open", "high", "low", "close", "volume")}
-    required = [time_column, *(fields[name] for name in ("open", "high", "low", "close"))]
+    required = [
+        *(parts.values() if parts else [time_column]),
+        *(fields[name] for name in ("open", "high", "low", "close")),
+    ]
     if any(not isinstance(name, str) or not name for name in required):
         raise ValueError("Map a timestamp and actual open/high/low/close columns")
     if not isinstance(fields["volume"], str):
@@ -446,15 +920,23 @@ def market_from_dataset(content: str, format_name: str, mapping: dict) -> dict:
         raise ValueError(
             "Selected market columns must be present in every row; prices are never invented"
         )
+    if mapping.get("period_boundary", "start") not in {"start", "end"}:
+        raise ValueError("Calendar period boundary must be start or end")
     bars = []
     try:
         for row in rows:
+            if any(isinstance(row.get(fields[name]), bool) for name in fields):
+                raise ValueError("OHLCV prices and volumes must be measurements, not boolean flags")
             bars.append(
                 Bar(
-                    _time(
-                        row[time_column],
-                        mapping.get("timezone", ""),
-                        mapping.get("timestamp_format", "iso"),
+                    _row_time(
+                        row,
+                        {
+                            **mapping,
+                            "observed_at_column": time_column,
+                            "timestamp_parts": parts,
+                            "period_boundary": mapping.get("period_boundary", "start"),
+                        },
                     ),
                     float(row[fields["open"]]),
                     float(row[fields["high"]]),
@@ -481,7 +963,7 @@ def market_from_dataset(content: str, format_name: str, mapping: dict) -> dict:
         "start": bars[0].timestamp.isoformat(),
         "end": bars[-1].timestamp.isoformat(),
         "warnings": [
-            "Imported market rows must be completed intervals. Set the actual bar duration and quote-currency assumptions before running. Corporate-action and survivorship adjustments remain the source owner's responsibility."
+            "Imported market rows must be completed intervals and timestamps are bar OPEN times. Coarse calendar market bars use period start unless explicitly changed. Set the actual bar duration and quote-currency assumptions before running. Corporate-action and survivorship adjustments remain the source owner's responsibility."
         ],
     }
 

@@ -285,6 +285,10 @@ def run_ml(bars: Sequence[Bar], config: Mapping[str, Any] | None = None) -> dict
         slippage_bps=_finite(settings.get("slippage_bps", 5), "slippage_bps"),
         periods_per_year=_finite(settings.get("periods_per_year", 365), "periods_per_year"),
         bar_seconds=_finite(settings.get("bar_seconds", 86400), "bar_seconds"),
+        fixed_fee=_finite(settings.get("fixed_fee", 0), "fixed_fee"),
+        spread_bps=_finite(settings.get("spread_bps", 0), "spread_bps"),
+        data_delay_ms=_finite(settings.get("data_delay_ms", 0), "data_delay_ms"),
+        latency_ms=_finite(settings.get("latency_ms", 0), "latency_ms"),
     )
     benchmark_decisions: list[Decision | None] = [Decision(target_weight=1.0)] + [None] * (
         len(market) - 1

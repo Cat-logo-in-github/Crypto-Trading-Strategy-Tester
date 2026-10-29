@@ -6,16 +6,21 @@ For example, a count of shops, permits or health inspections does not measure ic
 
 ## Search and select
 
-The catalog search has two implemented discovery backends:
+The catalog search supports several independent discovery backends. **Across catalogs** searches at most three in parallel, chooses a domain-relevant starting catalog and reports unavailable catalogs instead of hiding failures:
 
 | Catalog | Useful starting questions | Access and scope |
 | --- | --- | --- |
 | Public Socrata catalogs | Traffic, civic activity, environment, permits, businesses and other publisher datasets | Discovery without a key; every publisher sets its own data terms and quotas |
 | World Bank indicators | Population, urban growth, transport, climate, development and economic indicators | Keyless API; this release searches World Development Indicators/source 2, not every World Bank collection |
+| European open data | National, regional and European government/scientific datasets across domains | Public metadata via the official CKAN-compatible search; actual resource access and licensing vary |
+| UN OCHA Humanitarian Data Exchange | Population, infrastructure, health, environment and humanitarian measurements | Public catalog metadata; restricted/request-only and unsupported binary files remain references |
+| NASA Earthdata CMR | Satellite, Earth observation, climate and geodesy collections | Public collection metadata; actual downloads may require an Earthdata account and specialized extraction |
 
 Enter a phrase, inspect candidate descriptions, units, columns, geography, dates and license, then select a source. Empty results mean no suitable candidate was found in that catalog and search scope. Try another phrase, another catalog or the generic HTTPS/import workflow; no substitute is silently selected.
 
-Socrata search returns at most 20 candidates. World Bank searches a bounded metadata index of up to three pages of 1,000 indicators, cached in memory for 15 minutes. Matching uses words in titles and source notes; it is not a semantic search of the entire web. Neither catalog guarantees uptime, complete coverage or that a particular historical series exists. The [Socrata data discovery documentation](https://dev.socrata.com/data/) describes its catalog network; the [World Bank API overview](https://datahelpdesk.worldbank.org/knowledgebase/articles/889392-about-the-indicators-api-documentation) describes the indicator API.
+Search returns at most 20 candidates. World Bank searches a bounded metadata index of up to three pages of 1,000 indicators, cached in memory for 15 minutes. Matching uses metadata words plus explicit domain rules. A shared location alone is a weak match; an orbital collection takes priority over an unrelated New York transport table for a satellite question. `exact` means the downloadable candidate's metadata matches the requested terms, not that its measurements, licensing or causal timing have been verified. `related` requires an additional definition or extraction. `weak` must not be substituted for the question. Long satellite/region queries are broadened to `satellite orbit` in domain catalogs, and `effective_queries` exposes the actual search terms. This is bounded catalog discovery, not a search engine for the entire web.
+
+The [Socrata data discovery documentation](https://dev.socrata.com/data/), [World Bank API overview](https://datahelpdesk.worldbank.org/knowledgebase/articles/889392-about-the-indicators-api-documentation), [European search API](https://data.europa.eu/api/hub/search/), [HDX API cookbook](https://data.humdata.org/dataset/2048a947-5714-4220-905b-e662cbcd14c8/resource/3b675846-d01c-4fc9-b577-b7d426d2a598/download/hdx-ckan-api-cookbook.pdf) and [NASA CMR API](https://cmr.earthdata.nasa.gov/search/site/docs/search/api.html) describe their respective interfaces. Catalogs do not guarantee that a particular historical series exists.
 
 ## Download and map
 
@@ -26,9 +31,26 @@ The public-source fetchers are:
 - **Socrata datasets:** select a discovered publisher domain and dataset ID. Fetch up to 5,000 rows, ordered by the source row ID. An optional source filter can narrow the sample. An owner-provided app token, if necessary, goes only to that publisher in `X-App-Token`. This bounded download may not contain the full historical period; inspect source filters, row counts and timestamps before training.
 - **World Bank annual indicators:** choose one country, an exact indicator ID and a year range. Missing values are omitted; duplicate, incomplete or out-of-range years are rejected. An annual observation is dated at the end of its year, not its beginning. Revised annual values are unsuitable for pretending to observe that value continuously during the year. The API's [call-structure documentation](https://datahelpdesk.worldbank.org/knowledgebase/articles/898581-api-basic-call-structures) explains country, indicator, date and pagination parameters.
 - **IMF PortWatch:** choose one port ID and a historical date range from 2019 onward. Fetch up to five 1,000-row pages of completed daily port calls and estimated import/export tonnes. `port0` is Abbot Point in the provider's reference catalog. This is one optional example domain, not the product's focus. Its [public daily layer](https://services9.arcgis.com/weJ1QsnbMYJlCHdG/arcgis/rest/services/Daily_Ports_Data/FeatureServer/0) and [port reference](https://services9.arcgis.com/weJ1QsnbMYJlCHdG/arcgis/rest/services/PortWatch_ports_database/FeatureServer/0) expose the schema and IDs.
-- **Custom HTTPS CSV/JSON:** enter a documented public HTTPS endpoint. Select CSV or a JSON array path, such as `data.items`; an optional per-record object path, such as `attributes`, selects the tabular record within each array item. This is a single GET with a 4 MB and 5,000-row cap, without automatic pagination. Other repository APIs can use this route or an exported local file.
+- **European/HDX resources:** a dataset candidate exposes its listed resources. A supported public HTTPS text resource is proposed for review. Restricted resources, HTML pages, archives and binary files are references rather than automatic training inputs. A successful catalog match does not prove that the file is under the local size limit or still available.
+- **Custom HTTPS tables:** enter a documented public HTTPS endpoint. Supports CSV, TSV, JSON, NDJSON and GeoJSON FeatureCollection properties/points. JSON supports an array path such as `data.items`, plus an optional per-record object path such as `attributes`. NDJSON/GeoJSON are explicitly normalized to a JSON table and the original `input_format` is retained in provenance. This is a single GET with a 4 MB and 5,000-row cap, without automatic pagination. Other repository APIs can use this route or an exported local file.
 
 Existing weather and market connectors remain optional. See [data providers](data-providers.md) for their separate coverage and terms. Arbitrary images, audio, raw AIS streams and unstructured text require a feature-extraction workflow before they become numeric model inputs; the generic tabular mapper does not automatically interpret them.
+
+## Review the interpretation
+
+The inspector returns a quality report, suggested mappings, the detected table kind and explicit assumptions. It reports missing cells, duplicate rows, ambiguous time formats and multiple entities. It never discards duplicate rows, fills numeric gaps, learns a future category vocabulary or silently substitutes one entity for another.
+
+Supported layouts include wide measurements, long field/value records, entity panels, event logs, text-derived signals and GeoJSON properties. Point longitude/latitude become `_longitude` and `_latitude`; polygon geometry is not converted into an invented centroid or area. Static spatial catalogs still need real observation/publication times before a historical experiment can use them.
+
+Time mappings support ISO, explicitly chosen Unix seconds/milliseconds, day/month or month/day calendar formats, compact `YYYYMMDD`, year and year/month. Ambiguous dates require a choice. Separate calendar columns use `timestamp_parts: {year, month, day}` and optionally `available_at_parts`. Parts name source columns; year is required, month/day optional. Date-only/common calendar values require an explicit timezone. Coarse year/month measurements use the next period boundary by default, so a year's total is not available at the beginning of that year; `period_boundary: start` is an explicit alternative definition. Publication timing is still independent.
+
+Selecting time/entity keys removes stale numeric, categorical or text feature selections for those keys, with an explanation. An exact entity filter is `filter: {column, equals}`; it preserves the source value type. Multiple entities are not implicitly summed. Text signals support case-insensitive exact `equals`, `contains`, literal occurrence `count` and `length`. For example, `equals: NY` distinguishes NY from NYC; confirm that those labels describe the intended physical events.
+
+An explicitly selected aggregation can count rows, sum values or average values within completed UTC day/month buckets. It becomes available only after the bucket ends and all included rows have been published. Sums/means remain missing if an included measurement is missing. Absent buckets are not invented as zero. A row count is an event count only if the user confirms that each row is one event; revisions or repeated rows can otherwise count more than once. These full-bucket aggregates do not represent partial intraday counts.
+
+## Satellite questions
+
+The [official CelesTrak satellite catalog](https://celestrak.org/satcat/search.php) is offered as a curated reference to current satellite information and orbital elements. It is not a fetched historical pass-event dataset. NASA CMR supplies collection metadata, not automatically extracted image measurements or pass counts. Historical passes over NY versus NJ need defined regions, satellite selection, pass/elevation/distance criteria, historical orbit vintages and a documented propagation method, or an authorized event history from a publisher. This release does not propagate orbits or extract raster/HDF/NetCDF measurements. Import externally generated timestamped event/position features, then use explicit label, spatial and aggregation rules. Current orbital elements must not be replayed as if they were historical observations.
 
 ## When was this information knowable?
 
@@ -57,6 +79,8 @@ AISStream is listed as an informational live-data reference only. Its [official 
 ## Verified behavior
 
 Actual keyless requests from this host succeeded for a Socrata `traffic` search and three-row download (Calgary Traffic Incidents, resource `35ra-9556`), World Bank `USA` / `SP.URB.GROW` for 2020-2022 (three annual observations), and PortWatch `port0` for 1-10 January 2024 (ten daily observations). These probes establish reachability at verification time, not ongoing availability or statistical suitability.
+
+Public metadata probes on 29 October 2026 also succeeded for NASA CMR `satellite orbit`, European CKAN-compatible searches for `satellite` and `traffic count`, and HDX `population`. These verified collection/resource metadata shapes, not training-ready historical feature files. The documented UK catalog URL redirected to a hostname unresolved on this host, so it was not added as a working connector. The local app continues to refuse credential-forwarding redirects.
 
 The offline source tests use independent synthetic response shapes to check catalog matching, bounded paging/cache, malformed responses, invalid filters, missing keys, credential redaction, acquired availability, JSON/CSV schema limits, private-address rejection, DNS pinning, redirect refusal, quotas and network errors. They make no external API calls.
 

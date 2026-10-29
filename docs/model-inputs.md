@@ -89,7 +89,7 @@ Prompts may also use `{target}` for the configured target field and `{horizon}` 
 
 Only supported public connection settings are included in results. Credential/password/token fields are excluded, and a known session credential echoed by the model is redacted before output is retained or displayed. This does not make the selected endpoint trustworthy: the user chooses the receiving service and its own retention policy.
 
-Historical endpoint replay is bounded to an explicit 1-64 observation budget. Actual calls occur now, not at simulated historical times. Modern language models can contain later knowledge even when their prompts contain only earlier features. Reported inference latency is diagnostic and is not added to simulated fills. These experiments are exploratory replays, not verified historical deployment tests.
+Historical endpoint replay is bounded to an explicit 1-64 observation budget. Actual calls occur now, not at simulated historical times. Modern language models can contain later knowledge even when their prompts contain only earlier features. `model_config.include_inference_latency` defaults to true and adds the measured present-day service duration to decision readiness, before configured order latency. Disabling it explicitly makes duration diagnostic only. This is a timing scenario, not proof of historical model/hardware availability. A small delay may skip an entire coarse bar; see the [engine audit](engine-audit-2026.md).
 
 A language model may also suggest data-discovery terms and candidate measurements. That generated plan does not execute code or establish that a source exists, has a suitable license, or contains point-in-time history. Review the source metadata and mappings before a fetch or experiment.
 

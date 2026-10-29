@@ -369,7 +369,7 @@ def build(output: Path, runtime: Path | None = None, runtime_zip: Path | None = 
     )
     manifest = {
         "application": "Hypothesis Lab",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "platform": "Windows x64",
         "python": runtime_info["python"],
         "openssl": runtime_info["openssl"],

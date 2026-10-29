@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
+from .algorithms import FUNCTIONS, plan_algorithm, plan_with_llm
 from .features import demo_content, idea_examples, inspect_dataset, market_from_dataset
 from .ideas import plan_idea
 from .models import inspect_uploaded
@@ -128,6 +129,8 @@ class Handler(BaseHTTPRequestHandler):
                         "settings": credential_status(),
                         "feature_demo": demo_content(),
                         "idea_examples": idea_examples(),
+                        "algorithm_functions": FUNCTIONS,
+                        "project": "Student project for historical strategy research and simulated paper trading. No real orders or promise of profitable/scientifically conclusive results.",
                         "privacy": "Experiments and source/model keys are session-only by default. Export or explicitly save locally when you choose; there is no app-operator backend.",
                         "optional_models": {
                             "onnx": importlib.util.find_spec("onnxruntime") is not None,
@@ -155,7 +158,20 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(403, {"error": "Open the local application to export experiments"})
                     return
                 self._send(200, self.server.experiment(path.rsplit("/", 1)[-1]))
-            elif path in {"/", "/app.js", "/style.css", "/workbench.js", "/terminal.css"}:
+            elif path == "/api/execution/profiles":
+                from .costs import execution_profiles
+
+                self._send(200, {"profiles": execution_profiles()})
+            elif path in {
+                "/",
+                "/app.js",
+                "/style.css",
+                "/workbench.js",
+                "/terminal.css",
+                "/studio.js",
+                "/studio.css",
+                "/favicon.svg",
+            }:
                 name = "index.html" if path == "/" else path[1:]
                 file = Path(__file__).with_name("static") / name
                 self._send(
@@ -190,6 +206,7 @@ class Handler(BaseHTTPRequestHandler):
                     "/api/model/inspect",
                     "/api/dataset/inspect",
                     "/api/dataset/market",
+                    "/api/algorithm/preview",
                 }
                 else 3_000_000
             )
@@ -205,12 +222,29 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ValueError("Request must be a JSON object")
             path = urlsplit(self.path).path
-            if path in {"/api/run", "/api/search", "/api/import", "/api/rerun"}:
+            if path in {
+                "/api/run",
+                "/api/search",
+                "/api/import",
+                "/api/rerun",
+                "/api/algorithm/preview",
+            }:
                 if not self.server.run_lock.acquire(blocking=False):
                     self._send(409, {"error": "An experiment is already running"})
                     return
                 try:
-                    if path == "/api/search":
+                    if path == "/api/algorithm/preview":
+                        preview = run_experiment({**payload, "mode": "algorithm"}, persist=False)
+                        value = {
+                            "preview": preview["diagnostics"]["inference_decisions"][:20],
+                            "interpretation": preview["algorithm"],
+                            "period": preview["period"],
+                            "warnings": preview["warnings"],
+                            "fields": preview.get("feature_dataset", {}).get("generated_fields", [])
+                            if preview.get("feature_dataset")
+                            else [],
+                        }
+                    elif path == "/api/search":
                         value = feature_search(payload)
                     elif path == "/api/import":
                         value = self.server.remember(
@@ -236,6 +270,21 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.run_lock.release()
             elif path == "/api/parse":
                 value = parse_hypothesis(payload.get("text", ""), payload.get("fields"))
+            elif path == "/api/algorithm/plan":
+                description = payload.get("description", payload.get("query", ""))
+                if not isinstance(description, str):
+                    raise ValueError("Describe the algorithm using text")
+                fields = payload.get("fields", [])
+                value = (
+                    plan_with_llm(
+                        description, fields, payload["connection"], payload.get("credential")
+                    )
+                    if payload.get("connection")
+                    else plan_algorithm(description, fields)
+                )
+                data_plan = plan_idea(description, fields)
+                value["search_terms"] = data_plan["search_terms"]
+                value["data_requirements"] = data_plan["data_requirements"]
             elif path == "/api/dataset/inspect":
                 value = inspect_dataset(
                     payload.get("content", ""), payload.get("format", "csv"), payload.get("mapping")

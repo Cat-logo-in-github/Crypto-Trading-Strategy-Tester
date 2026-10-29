@@ -16,7 +16,7 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("Local quantitative research workbench")]
 [assembly: AssemblyCompany("Hypothesis Lab contributors")]
 [assembly: AssemblyProduct("Hypothesis Lab")]
-[assembly: AssemblyVersion("0.2.0.0")]
+[assembly: AssemblyVersion("0.3.0.0")]
 
 internal static class Program
 {

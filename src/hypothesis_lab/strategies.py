@@ -16,16 +16,16 @@ class Strategy(Protocol):
 
 
 def sma(values: list[float], window: int) -> float | None:
-    if not 1 <= window <= 1000:
+    if isinstance(window, bool) or not isinstance(window, int) or not 1 <= window <= 1000:
         raise ValueError("Indicator window must be 1..1000")
-    return sum(values[-window:]) / window if len(values) >= window else None
+    return (
+        math.fsum(value / window for value in values[-window:]) if len(values) >= window else None
+    )
 
 
 def feature(name: str, bars: list[Bar], i: int, events: list[Event], spec: dict) -> float | None:
     aligned = spec.get("_aligned_features")
     external_name = name[6:] if name.startswith("event:") else name
-    if aligned is not None and external_name in aligned[i]:
-        return aligned[i][external_name]
     closes = [b.close for b in bars[: i + 1]]
     if name == "close":
         return closes[-1]
@@ -35,11 +35,22 @@ def feature(name: str, bars: list[Bar], i: int, events: list[Event], spec: dict)
         window = int(name[9:])
         if not 1 <= window <= 1000:
             raise ValueError("Momentum window must be 1..1000")
-        return closes[-1] / closes[-window - 1] - 1 if len(closes) > window else None
+        value = closes[-1] / closes[-window - 1] - 1 if len(closes) > window else None
+        if value is not None and not math.isfinite(value):
+            raise ValueError("Momentum exceeds finite numeric limits")
+        return value
+    if aligned is not None and external_name in aligned[i]:
+        value = aligned[i][external_name]
+        if value is not None and (not isinstance(value, (int, float)) or not math.isfinite(value)):
+            raise ValueError("Aligned rule features must be finite numbers or missing")
+        return value
     external_field = name[6:] if name.startswith("event:") else name
     if name == "temperature" or any(event.field == external_field for event in events):
         # At close time of this bar. Interval duration is explicit, never inferred from future data.
-        when = bars[i].timestamp + timedelta(seconds=spec.get("bar_seconds", 86400))
+        when = bars[i].timestamp + timedelta(
+            seconds=spec.get("bar_seconds", 86400),
+            microseconds=math.ceil(float(spec.get("data_delay_ms", 0)) * 1000),
+        )
         return available_value(
             events,
             when,
@@ -201,11 +212,28 @@ def parse_hypothesis(text: str, fields: list[str] | None = None) -> dict:
 
 
 def decisions_for(
-    bars: list[Bar], spec: dict, events: list[Event] | None = None
+    bars: list[Bar],
+    spec: dict,
+    events: list[Event] | None = None,
+    *,
+    start_index: int = 0,
+    end_index: int | None = None,
 ) -> list[Decision | None]:
+    end = len(bars) if end_index is None else end_index
+    if (
+        isinstance(start_index, bool)
+        or not isinstance(start_index, int)
+        or isinstance(end, bool)
+        or not isinstance(end, int)
+        or not 0 <= start_index < end <= len(bars)
+    ):
+        raise ValueError("Rule evaluation bounds must use an inclusive start and exclusive end")
     duration = float(spec.get("bar_seconds", 86400))
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("bar_seconds must be positive")
+    data_delay = float(spec.get("data_delay_ms", 0))
+    if not math.isfinite(data_delay) or not 0 <= data_delay <= 31_536_000_000:
+        raise ValueError("data_delay_ms must be between zero and 365 days")
     if any((b.timestamp - a.timestamp).total_seconds() < duration for a, b in zip(bars, bars[1:])):
         raise ValueError("bar_seconds overlaps the next bar; set the actual market interval")
     locations_by_field: dict[str, set[str]] = {}
@@ -218,15 +246,24 @@ def decisions_for(
     result: list[Decision | None] = []
     entered = False
     for i in range(len(bars)):
+        if i < start_index or i >= end:
+            result.append(None)
+            continue
+        ready = (
+            bars[i].timestamp
+            + timedelta(seconds=duration, microseconds=math.ceil(data_delay * 1000))
+            if data_delay
+            else None
+        )
         if spec.get("exit") and evaluate_rule(spec["exit"], bars, i, events or [], spec):
-            result.append(Decision(target_weight=0))
+            result.append(Decision(target_weight=0, available_at=ready))
         elif not (spec.get("once") and entered) and evaluate_rule(
             spec["entry"], bars, i, events or [], spec
         ):
             result.append(
-                Decision(buy_cash=float(spec.get("amount", 100)))
+                Decision(buy_cash=float(spec.get("amount", 100)), available_at=ready)
                 if spec.get("sizing") == "cash"
-                else Decision(target_weight=float(spec.get("weight", 1)))
+                else Decision(target_weight=float(spec.get("weight", 1)), available_at=ready)
             )
             entered = True
         else:

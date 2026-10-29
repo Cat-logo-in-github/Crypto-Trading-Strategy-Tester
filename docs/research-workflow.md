@@ -4,9 +4,15 @@ The workbench connects a question, observations, a precise signal, simulated ord
 
 A question still needs a measurable quantity, sufficient overlapping history and permission to use the data. A public catalog cannot guarantee an exact dataset for every idea. The app makes that gap visible instead of silently replacing the question with an unrelated proxy.
 
+## Start with the guided setup
+
+**New experiment** follows **Idea → Data → Signal → Period → Run**. The detailed data, rule and model desks remain available when needed; **Return to experiment setup** brings their configured inputs back into the guided flow. This is a student project for historical paper-trading research, with no real orders.
+
+The review page shows the actual decision expressions, data availability, period and execution assumptions. Drafts requiring clarification are not accepted as executable algorithms.
+
 ## 1. Define what the question measures
 
-Open **Data discovery** and describe the idea. **Interpret data requirements** proposes search terms, measurement requirements, signal definitions and questions that need clarification. Review the proposal before using it. It is not an unrestricted natural-language strategy compiler.
+Open **Find & prepare data** and describe the idea. **Interpret data requirements** proposes search terms, measurement requirements, signal definitions and questions that need clarification. Review the proposal before using it. It is not an unrestricted natural-language strategy compiler.
 
 For example, "buy when my merch sales rise" needs decisions about:
 
@@ -21,10 +27,10 @@ The optional LLM planning choice uses the model connection configured under **Mo
 
 ## 2. Find or import the observations
 
-Use one of these paths in **Data discovery**:
+Use one of these paths in **Find & prepare data**:
 
-- Search the public city/government catalog or World Bank indicators. Read the returned description, publisher page, access conditions, units and coverage before fetching a candidate.
-- Choose a local CSV or JSON file. JSON may be an array of records or a supported `records`, `data` or `items` wrapper. Small nested objects and short arrays are flattened into named fields.
+- Search available public catalogs, including city/government data, World Bank, NASA, European and humanitarian catalogs. Read the returned description, publisher page, access conditions, units and coverage before fetching a candidate.
+- Choose a local CSV, TSV, JSON, NDJSON or point GeoJSON file. JSON may be an array of records or a supported `records`, `data` or `items` wrapper. Small nested objects and short arrays are flattened into named fields.
 - Configure a documented HTTPS CSV/JSON endpoint under **Fetch a known HTTPS API / other connector**. Select the response format, a JSON record-array path when needed and the provider's documented authentication header. Supply your own session key only when required.
 - Use the **synthetic world-signals demo** to learn the workflow without an account or network request. Its ice-cream, merch, traffic, urban-growth, shipping, weather and rubber-duck columns are generated fixtures, not actual economic observations.
 
@@ -46,13 +52,27 @@ When a real publication column exists, use it. When it does not, the conservativ
 
 Numeric columns work directly. JSON booleans can be numeric inputs; CSV booleans can be represented explicitly as 0/1. Categorical fields use fixed hash buckets rather than a vocabulary learned from future data; collisions are possible. Text can be converted into an explicit phrase count, phrase-presence indicator or character length through advanced mapping. Raw images, audio and arbitrary nested documents require user-defined preprocessing or a compatible local inference service.
 
+Review the quality summary and proposed mapping suggestions. Separate calendar columns can be combined explicitly; day/month ambiguity has format controls. Selecting a date component or entity key removes it from measurement choices. Entity filters preserve the original value type. Aggregation into counts, sums or averages is an explicit choice. Metadata-only NASA/orbit records do not create numeric imagery or historical pass events.
+
 Click **Validate & use these features** after editing the mapping. The application joins observations to market decision times using availability and expiry. Future publications and later revisions are not exposed early.
 
 For a simple observed-feature rule, select a mapped `event:field_name` in the condition builder, such as `event:ice_cream_sales > 120`. AND/OR conditions, technical market indicators and position sizing remain explicit. A "rise" rule needs a defined transformation; a raw threshold is not automatically interpreted as growth.
 
+## Safe algorithm conditions
+
+The guided **Signal** step can build a condition from a measured field and a trailing operation. The algorithm option combines bounded expressions such as:
+
+```text
+pct_change(col("sales"), 7) > 0.05 and market.close > mean(market.close, 20)
+```
+
+Set a separate sell condition or explicitly choose to hold or exit when entry becomes false. Buy budgets accumulate at each qualifying close; target weights rebalance toward an exposure. Named intermediate calculations can also become model inputs. Safe operators cover causal rolling functions, crossings, text-derived fields, UTC calendar values and location rules using actual coordinate measurements. Arbitrary Python is not executed.
+
+A region condition is an explicit test on imported coordinates, not proof of a satellite pass or an automatic way to process imagery. The relevant observation, historical availability and geometry must exist.
+
 ## 4. Train or connect a model
 
-Open **Models & inference**. Market OHLCV, bar duration, fees, slippage and starting capital still come from **Strategy research**. The input observation dataset comes from **Data discovery**. These are separate datasets and can describe different phenomena.
+Open **Models & inference**. Market OHLCV, bar duration, fees, slippage and starting capital still come from **Rule desk**. The input observation dataset comes from **Find & prepare data**. These are separate datasets and can describe different phenomena.
 
 ### Train a local baseline
 
@@ -104,6 +124,14 @@ The same structure applies to traffic, authorized sales or another supported mea
 
 All model intents use the same next-open execution and accounting as rule strategies. Models cannot create their own fills. Fees, adverse slippage, missing observations and available cash can change what a signal accomplishes.
 
+## Choose the period and execution scenario
+
+Choose dates or a final number of supplied market bars. Rules and algorithms retain earlier rows for trailing warmup while trading only in the selected period. A trained model splits the chosen period into train, validation and held-out test, trading only in the test portion. Pretrained and endpoint evaluation can begin at the selected start, subject to their provenance limitations.
+
+Fee presets carry a dated official schedule scope and sources. They do not measure live spread, slippage, processing time or order latency. Numeric inputs remain authoritative. Fixed commissions are charged per filled order; full spread contributes half adversely on each side, separately from extra slippage.
+
+Fills use supplied bar opens. Even a small delay can move a daily-bar trade to the following day; use finer bars for latency-sensitive research. Presets do not reconstruct intrabar or order-book execution. Endpoint replay can include the currently measured service inference duration as an explicit additional readiness scenario; it is not historical venue latency.
+
 ## 6. Inspect the market, portfolio and discrepancies
 
 After a run, the dark research terminal provides:
@@ -111,7 +139,7 @@ After a run, the dark research terminal provides:
 - Market candles with actual simulated buy/sell markers, time-range controls and zoom.
 - A portfolio inspector at the selected bar, with cash, units, position value, realized/unrealized P&L and drawdown when available.
 - Equity, drawdown and exposure views.
-- An execution blotter containing all fills, filtered and paged; selecting a fill reveals its decision/fill times, fees, slippage, cash change and related model output.
+- An execution blotter containing all fills, filtered and paged; selecting a fill reveals bar close, market publication readiness, decision readiness, order eligibility, actual fill, proportional/fixed commission, spread/slippage impact, cash and related output.
 - An inference-to-decision-to-execution table. Large histories can be bounded in the visible table; an explicit export includes the full record.
 
 A correct forecast about external activity can coexist with a losing market trade. Inspect the realized target separately from the following market return, then inspect costs, timing, missing-data coverage and the economic hypothesis. The next-bar discrepancy indicator is descriptive; it is not the full trade's realized return or evidence of causality.

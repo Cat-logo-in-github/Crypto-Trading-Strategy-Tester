@@ -209,10 +209,20 @@ class EndpointInferenceTests(unittest.TestCase):
         record = result["inference_decisions"][0]
         self.assertEqual(record["usage"]["completion_tokens"], 8)
         self.assertAlmostEqual(record["prediction"], 0.75)
-        self.assertEqual(record["fills"][0]["filled_at"], bars[16].timestamp.isoformat())
+        # The output is not ready at day16's open: 10ms of inference must
+        # advance the fill to the next supplied open, rather than relabel time.
+        self.assertEqual(record["fills"][0]["filled_at"], bars[17].timestamp.isoformat())
         self.assertAlmostEqual(record["fills"][0]["quantity"], 100 / (100 * 1.01 * 1.01))
         self.assertNotIn("session-key", json.dumps(result))
         self.assertTrue(any("future knowledge" in warning for warning in result["warnings"]))
+        with patch("hypothesis_lab.local_inference.call_llm", side_effect=local_model):
+            disabled = run_endpoint_model(
+                bars, rows, {**config, "include_inference_latency": False}, connection()
+            )
+        self.assertEqual(
+            disabled["inference_decisions"][0]["fills"][0]["filled_at"],
+            bars[16].timestamp.isoformat(),
+        )
 
     def test_tabular_endpoint_uses_ordered_features_and_one_output_per_row(self):
         bars, rows = data()

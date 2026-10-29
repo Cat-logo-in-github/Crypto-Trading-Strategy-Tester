@@ -308,6 +308,10 @@ class ResearchTests(IsolatedState):
             "slippage_bps": 17,
             "periods_per_year": 252,
             "bar_seconds": 43200,
+            "fixed_fee": 0.5,
+            "spread_bps": 12,
+            "data_delay_ms": 3,
+            "latency_ms": 100,
         }
         record = run_experiment(
             {"mode": "ml", "execution": execution, "ml": {"horizon": 2, "ridge_alphas": [1]}},

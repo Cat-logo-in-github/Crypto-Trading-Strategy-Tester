@@ -95,7 +95,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
-          case "$TAG_NAME" in v[0-9]*) ;; *) echo 'Use a version tag such as v0.2.0'; exit 1 ;; esac
+          case "$TAG_NAME" in v[0-9]*) ;; *) echo 'Use a version tag such as v0.3.0'; exit 1 ;; esac
           if ! gh release view "$TAG_NAME" > /dev/null 2>&1
           then
             gh release create "$TAG_NAME" --title "$TAG_NAME" --generate-notes

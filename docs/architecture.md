@@ -1,6 +1,6 @@
 # Actual system architecture
 
-The supported v0.2 package is `src/hypothesis_lab`. A standard-library Python service binds to `127.0.0.1` and serves bundled HTML/CSS/JavaScript, including the dark market terminal. There is no Node build step, mandatory cloud service, account, telemetry or paid core dependency. GitHub Pages serves the static landing page and documentation, not research execution.
+The supported v0.3 package is `src/hypothesis_lab`, a student project for historical strategy research and simulated paper trading. A standard-library Python service binds to `127.0.0.1` and serves the guided studio and dark market terminal. There is no Node build step, mandatory cloud service, account, telemetry or paid core dependency. GitHub Pages serves the static landing page and documentation, not research execution.
 
 ## Shared research flow
 
@@ -23,14 +23,17 @@ The question planner proposes definitions rather than asserting that a dataset e
 | Module | Actual responsibility |
 | --- | --- |
 | `data.py` | Immutable market `Bar` and external `Event` records, UTC/finite-value validation, market CSV loading and identity |
-| `features.py` | Generic CSV/JSON inspection, observation/publication mappings, expiry/revisions, fixed categorical hashing, defined text measurements and causal lag/rolling transformations |
+| `features.py` | CSV/TSV/JSON/NDJSON/GeoJSON tables, quality/suggested roles, composite dates, entity filters, causal aggregation, observation/publication mappings, expiry/revisions, text/categorical measurements and trailing transformations |
 | `ideas.py` | Deterministic question-to-data-requirements proposal and clarifications |
-| `sources.py` | Public catalog search, Socrata/World Bank/PortWatch fetches and a bounded user-selected HTTPS CSV/JSON adapter; keys are arguments, not stored metadata |
+| `sources.py` | Ranked public discovery across Socrata/World Bank/NASA/European/HDX catalogs, metadata versus table boundaries, bounded source fetches and custom HTTPS APIs; keys are arguments, not stored metadata |
+| `algorithms.py` | Bounded causal expression interpreter, named signal chains, separate entry/exit intent and reviewed deterministic/user-model drafts; never Python eval |
+| `periods.py` | UTC historical duration, completed-bar eligibility and earlier warmup selection |
+| `costs.py` | Dated official commission evidence plus separately labeled editable spread/slippage/delay assumptions |
 | `strategies.py` | Supported deterministic parsing, AND/OR rule trees, arbitrary `event:field` conditions and the trusted local Python strategy protocol |
 | `ml.py` | Original five-market-feature ridge baseline and its safe numeric inference interface |
 | `models.py` | General named-feature logistic/ridge research, chronological validation, numeric JSON models and optional local ONNX inference |
 | `local_inference.py` | Bounded requests to a user-operated tabular/LLM endpoint, explicit signal extraction and target/decision diagnostics |
-| `engine.py` | Shared `Decision` execution, fees/slippage, long-only cash constraints, portfolio accounting, order status and metrics |
+| `engine.py` | Shared readiness/latency queue, eligible-open execution, proportional/fixed commission, spread/slippage, active-window cash/position accounting, order clocks and metrics |
 | `research.py` | Dataset/model orchestration, common clock, result provenance, market/portfolio/inference records and export/rerun configuration |
 | `server.py` | Loopback UI, structured HTTP routes, session buffer, origin/Host/token checks and modest single-user operation locks |
 | `storage.py` | Explicit local run persistence, content-based record identity and the separately consented Alpha Vantage credential file |
@@ -56,7 +59,7 @@ Optional source requests go directly from the local app to the selected public p
 
 ## Execution and release boundaries
 
-The simulator covers one instrument, long-only fractional spot holdings and market fills at the next supplied open. It does not implement synchronized multi-asset portfolios, order books, margin, advanced orders, corporate actions, real-money brokerage or a persistent forward paper-trading service. The original source in `legacy/` is preserved but not imported by the supported launcher; the audit explains why.
+The simulator covers one instrument, long-only fractional spot holdings and market fills at the first supplied later open eligible after publication, optional inference readiness and order latency. Even a small delay can defer a whole coarse bar; this is not intrabar execution reconstruction. It does not implement synchronized multi-asset portfolios, order books, margin, advanced orders, corporate actions, real-money brokerage or a persistent forward paper-trading service. The original source in `legacy/` is preserved but not imported by the supported launcher; the audit explains why.
 
 The release is source and small redistributable fixtures, not an AI/model appliance. Packaging enforces a 20 MB source ZIP budget and a 10 MB per-source-file budget, with allowlists and exclusions for user datasets, credentials, environments, caches and model weights. Optional runtimes, SDKs and large model files are installed or operated separately by the user.
 

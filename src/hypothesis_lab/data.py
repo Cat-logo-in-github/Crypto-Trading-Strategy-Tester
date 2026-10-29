@@ -13,6 +13,8 @@ from pathlib import Path
 
 
 def timestamp(value: str | datetime) -> datetime:
+    if not isinstance(value, (str, datetime)):
+        raise ValueError("Timestamp must be an ISO string or a timezone-aware datetime")
     result = (
         datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
     )
@@ -35,7 +37,10 @@ class Bar:
     def __post_init__(self) -> None:
         object.__setattr__(self, "timestamp", timestamp(self.timestamp))
         values = (self.open, self.high, self.low, self.close, self.volume)
-        if not all(math.isfinite(x) for x in values):
+        if not all(
+            isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+            for x in values
+        ):
             raise ValueError("Bar values must be finite")
         if min(values[:4]) <= 0 or self.volume < 0:
             raise ValueError("OHLC must be positive and volume nonnegative")
@@ -56,13 +61,27 @@ class Event:
     def __post_init__(self) -> None:
         object.__setattr__(self, "observed_at", timestamp(self.observed_at))
         object.__setattr__(self, "available_at", timestamp(self.available_at))
-        if self.available_at < self.observed_at or not math.isfinite(self.value):
+        if (
+            self.available_at < self.observed_at
+            or not isinstance(self.value, (int, float))
+            or isinstance(self.value, bool)
+            or not math.isfinite(self.value)
+        ):
             raise ValueError("Events require finite values and availability at/after observation")
+        if (
+            not isinstance(self.field, str)
+            or not self.field.strip()
+            or not isinstance(self.location, str)
+            or not self.location.strip()
+        ):
+            raise ValueError("Event field and location must be nonempty strings")
 
 
 def validate_bars(bars: list[Bar]) -> list[Bar]:
     if len(bars) < 2:
         raise ValueError("At least two completed market bars are required")
+    if not all(isinstance(bar, Bar) for bar in bars):
+        raise ValueError("Market data must contain validated Bar records")
     if any(b.timestamp <= a.timestamp for a, b in zip(bars, bars[1:])):
         raise ValueError("Market bars must be strictly chronological; duplicates are rejected")
     return bars
@@ -71,6 +90,8 @@ def validate_bars(bars: list[Bar]) -> list[Bar]:
 def load_bars(source: str | Path, *, content: bool = False) -> list[Bar]:
     text = str(source) if content else Path(source).read_text(encoding="utf-8-sig")
     rows = csv.DictReader(io.StringIO(text))
+    if rows.fieldnames and len(rows.fieldnames) != len(set(rows.fieldnames)):
+        raise ValueError("Market CSV column names must be unique")
     required = {"timestamp", "open", "high", "low", "close"}
     if not required.issubset(rows.fieldnames or []):
         raise ValueError("Market CSV requires timestamp,open,high,low,close; volume is optional")
@@ -94,6 +115,8 @@ def load_bars(source: str | Path, *, content: bool = False) -> list[Bar]:
 def load_events(source: str | Path, *, content: bool = False) -> list[Event]:
     text = str(source) if content else Path(source).read_text(encoding="utf-8-sig")
     rows = csv.DictReader(io.StringIO(text))
+    if rows.fieldnames and len(rows.fieldnames) != len(set(rows.fieldnames)):
+        raise ValueError("Event CSV column names must be unique")
     if not {"observed_at", "available_at", "value"}.issubset(rows.fieldnames or []):
         raise ValueError(
             "Event CSV requires observed_at,available_at,value; field,location optional"
@@ -125,6 +148,7 @@ def available_value(
     max_age_hours: float = 48,
 ) -> float | None:
     """Latest observed value among revisions published by `when`, with explicit expiry."""
+    when = timestamp(when)
     if not math.isfinite(max_age_hours) or max_age_hours <= 0:
         raise ValueError("Event maximum age must be positive and finite")
     eligible = [

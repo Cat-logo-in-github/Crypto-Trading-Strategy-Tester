@@ -841,6 +841,7 @@ def run_tabular_model(
             "target_type": target_type,
             "horizon": horizon,
             "decision": policy,
+            "evaluation_start_index": start,
             **asdict(execution),
         },
         "target": f"{target_field}[t+{horizon}] {'>' if target_type == 'increase' else '/ current - 1' if target_type == 'return' else 'future level'} {target_field}[t]"
