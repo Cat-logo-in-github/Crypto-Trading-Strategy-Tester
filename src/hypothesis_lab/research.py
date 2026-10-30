@@ -9,10 +9,11 @@ import json
 import random
 from dataclasses import asdict
 from datetime import timedelta
+from typing import Any, cast
 
 from .algorithms import algorithm_decisions, apply_signals, signal_rows
 from .data import fingerprint, fixtures, load_bars, load_events
-from .engine import ExecutionConfig, backtest, benchmark
+from .engine import Decision, ExecutionConfig, backtest, benchmark
 from .features import align_features, as_events, demo_content, derive_features, prepare_dataset
 from .local_inference import public_connection
 from .periods import select_period
@@ -34,6 +35,8 @@ def run_experiment(payload: dict, *, persist: bool = True) -> dict:
     allowed = set(ExecutionConfig.__dataclass_fields__)
     if not isinstance(cfg_data, dict) or set(cfg_data) - allowed:
         raise ValueError("Unknown execution setting")
+    if any(isinstance(value, bool) for value in cfg_data.values()):
+        raise ValueError("Execution settings must be numbers, not booleans")
     cfg = ExecutionConfig(
         **{k: float(v) for k, v in {**asdict(ExecutionConfig()), **cfg_data}.items()}
     )
@@ -80,7 +83,9 @@ def run_experiment(payload: dict, *, persist: bool = True) -> dict:
             from .data import Event
 
             for i, row in enumerate(aligned):
-                when = bars[i].timestamp + timedelta(seconds=cfg.bar_seconds)
+                when = bars[i].timestamp + timedelta(
+                    seconds=cfg.bar_seconds + cfg.data_delay_ms / 1000
+                )
                 for transform in transforms:
                     name = transform["name"]
                     value = row.get(name)
@@ -198,6 +203,9 @@ def run_experiment(payload: dict, *, persist: bool = True) -> dict:
                     if entry_values[index]
                     else "hold",
                     "features": aligned[index],
+                    "intent": asdict(cast(Decision, decisions[index]))
+                    if decisions[index]
+                    else None,
                     "execution_status": orders.get(index, {}).get("status", "hold"),
                     "fills": [
                         fill
@@ -209,6 +217,131 @@ def run_experiment(payload: dict, *, persist: bool = True) -> dict:
         result = {"interpretation": interpretation, "inference_decisions": previews}
     else:
         raise ValueError("Supported modes are rules, algorithm, ml, model and endpoint")
+    # All model/rule paths share the same optional execution backend. Training is
+    # completed once; replacing execution must never reselect on the test P&L.
+    replay = payload.get("execution_replay")
+    portfolio = payload.get("portfolio")
+    if replay and portfolio:
+        raise ValueError(
+            "Choose single-instrument event replay or linked-contract portfolio execution"
+        )
+    if replay or portfolio:
+        evaluation_start = next(
+            i
+            for i, bar in enumerate(bars)
+            if bar.timestamp.isoformat() == strategy["equity"][0]["timestamp"]
+        )
+        executed_decisions: list[Any]
+        if mode == "rules":
+            executed_decisions = decisions_for(
+                bars, runtime_spec, events, start_index=evaluation_start
+            )
+        elif mode == "algorithm":
+            executed_decisions = decisions
+        else:
+            executed_decisions = [None] * len(bars)
+            by_time = {bar.timestamp.isoformat(): i for i, bar in enumerate(bars)}
+            for prediction in result.get("inference_decisions", result.get("predictions", [])):
+                index = by_time[prediction["timestamp"]]
+                if "intent" in prediction:
+                    executed_decisions[index] = (
+                        Decision(**prediction["intent"]) if prediction["intent"] else None
+                    )
+                elif prediction["decision"] != "hold":
+                    executed_decisions[index] = Decision(
+                        target_weight=1.0 if prediction["decision"] == "long" else 0.0
+                    )
+        if portfolio:
+            from .algorithms import SignalInterpreter
+            from .portfolio import portfolio_backtest
+
+            if (
+                not isinstance(portfolio, dict)
+                or not isinstance(portfolio.get("legs"), dict)
+                or not portfolio["legs"]
+            ):
+                raise ValueError(
+                    "Linked-contract execution needs a signed quantity or causal expression for each leg"
+                )
+            quantities = {
+                symbol: SignalInterpreter(aligned).run(value)
+                if isinstance(value, str)
+                else [value] * len(bars)
+                for symbol, value in portfolio["legs"].items()
+            }
+            targets: list[dict | None] = []
+            for index, intent in enumerate(executed_decisions):
+                if intent is None or any(values[index] is None for values in quantities.values()):
+                    targets.append(None)
+                    continue
+                if intent.buy_cash is not None:
+                    raise ValueError(
+                        "Linked contracts require target exposure and explicit signed leg quantities; a single cash-buy budget cannot size a derivatives basket"
+                    )
+                else:
+                    scale = intent.target_weight or 0.0
+                targets.append(
+                    {
+                        "targets": {
+                            symbol: float(cast(float, values[index])) * scale
+                            for symbol, values in quantities.items()
+                        },
+                        "available_at": intent.available_at,
+                    }
+                )
+            strategy = portfolio_backtest(
+                bars, targets, cfg, portfolio, start_index=evaluation_start
+            )
+            base = portfolio_backtest(
+                bars, [None] * len(bars), cfg, portfolio, start_index=evaluation_start
+            )
+            base["label"] = "Same-currency cash and declared cash interest; no linked positions"
+
+        else:
+            from .microstructure import ReplayConfig, replay_backtest, replay_benchmark
+
+            if not isinstance(replay, dict):
+                raise ValueError("Execution replay configuration must be an object")
+            replay_config = {
+                key: value
+                for key, value in replay.items()
+                if key in ReplayConfig.__dataclass_fields__
+            }
+            raw = replay.get("records", replay.get("content", []))
+            if not isinstance(raw, (str, list)):
+                raise ValueError("Replay needs event records or file text")
+            form = replay.get("format", "records")
+            raw_intents = payload.get("execution_intents")
+            if raw_intents is not None:
+                if not isinstance(raw_intents, list) or len(raw_intents) != len(bars):
+                    raise ValueError(
+                        "Provide one explicit replay intent slot per retained reference bar"
+                    )
+                executed_decisions = raw_intents
+            strategy = replay_backtest(
+                bars,
+                cast(list[Decision | dict | None], executed_decisions),
+                cfg,
+                raw,
+                replay_config,
+                start_index=evaluation_start,
+                format=form,
+            )
+            base = replay_benchmark(
+                bars, cfg, raw, replay_config, start_index=evaluation_start, format=form
+            )
+        for prediction in result.get("inference_decisions", result.get("predictions", [])):
+            prediction["fills"] = [
+                fill
+                for fill in strategy["fills"]
+                if fill["decision_bar_open"] == prediction["timestamp"]
+            ]
+            prediction["execution_status"] = (
+                "filled" if prediction["fills"] else "no_fill_in_replay"
+            )
+        if mode in {"model", "endpoint", "ml"}:
+            result["backtest"] = strategy
+            result["benchmark"] = base
     excess = strategy["metrics"]["total_return"] - base["metrics"]["total_return"]
     record = {
         "schema_version": 1,
@@ -226,6 +359,11 @@ def run_experiment(payload: dict, *, persist: bool = True) -> dict:
                         sort_keys=True,
                     )
                     + json.dumps(algorithm.get("signals", []), sort_keys=True)
+                    + hashlib.sha256(
+                        json.dumps(
+                            {"portfolio": portfolio, "execution_replay": replay}, sort_keys=True
+                        ).encode()
+                    ).hexdigest()
                 ).encode()
             ).hexdigest(),
             "source": source,
@@ -256,6 +394,9 @@ def run_experiment(payload: dict, *, persist: bool = True) -> dict:
             "feature_data": feature_data,
             "feature_format": feature_format,
             "pretrained": payload.get("pretrained"),
+            "portfolio": portfolio,
+            "execution_replay": replay,
+            "execution_intents": payload.get("execution_intents"),
         },
         "strategy": strategy,
         "benchmark": base,
@@ -284,6 +425,13 @@ def run_experiment(payload: dict, *, persist: bool = True) -> dict:
             "Exploratory comparisons do not prove a predictive edge. Repeated selection increases false discoveries."
         ],
     }
+    from .validation import uncertainty
+
+    record["evidence"] = uncertainty(strategy, base)
+    record["portfolio"] = strategy.get("portfolio")
+    record["execution_replay"] = strategy.get("replay")
+    if portfolio and portfolio.get("data_status"):
+        record["warnings"].append(portfolio["data_status"])
     if not payload.get("market_csv"):
         record["warnings"].append(
             "Synthetic fixtures are for software demonstration only; results are not market performance."

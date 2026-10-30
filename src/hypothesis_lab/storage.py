@@ -55,7 +55,7 @@ def describe_experiment(record: dict) -> dict:
         "runtime": {
             "python": sys.version.split()[0],
             "platform": platform.system(),
-            "hypothesis_lab": "0.3.0",
+            "hypothesis_lab": "0.4.0",
             "mandatory_dependencies": [],
         },
     }

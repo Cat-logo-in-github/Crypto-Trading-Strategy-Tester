@@ -1,0 +1,350 @@
+{
+  "date": "2026-10-30",
+  "status": "Actual public data, exploratory retrospective tests; not verified point-in-time edge evidence",
+  "market": "Coinbase Exchange BTC-USD daily candles",
+  "market_bars": 274,
+  "sources": {
+    "market": {
+      "status": "fetched",
+      "bytes": 17472,
+      "url": "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=86400&start=2025-01-01T00:00:00Z&end=2025-10-01T00:00:00Z",
+      "count": 274
+    },
+    "duck": {
+      "status": "fetched",
+      "bytes": 43229,
+      "url": "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/Rubber_duck_debugging/daily/2025010100/2025100100",
+      "count": 274
+    },
+    "paper": {
+      "status": "fetched",
+      "bytes": 40607,
+      "url": "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/Toilet_paper/daily/2025010100/2025100100",
+      "count": 274
+    },
+    "sourdough": {
+      "status": "fetched",
+      "bytes": 40015,
+      "url": "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/Sourdough/daily/2025010100/2025100100",
+      "count": 274
+    },
+    "weather": {
+      "status": "fetched",
+      "bytes": 7716,
+      "url": "https://archive-api.open-meteo.com/v1/archive?latitude=36.17&longitude=-115.14&start_date=2025-01-01&end_date=2025-10-01&daily=precipitation_sum,sunshine_duration&timezone=UTC",
+      "count": 0
+    },
+    "quakes": {
+      "status": "fetched",
+      "bytes": 4743753,
+      "url": "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=2025-01-01&endtime=2025-10-01&minmagnitude=4.5&orderby=time-asc&limit=20000",
+      "count": 6621
+    },
+    "quake_count": {
+      "url": "https://earthquake.usgs.gov/fdsnws/event/1/count?starttime=2025-01-01&endtime=2025-10-01&minmagnitude=4.5",
+      "status": "fetched",
+      "count": 6621,
+      "bytes": 4
+    }
+  },
+  "raw_sha256": {
+    "duck.json": "c9570ce79b21012b022d872b9b85a3fc80b2485b5c8c04fd46dd628462e4f4c9",
+    "market.json": "feec5003fbefed4026f9c4c5ff84d15906b4032d22ffc0606eeb6fe4de238024",
+    "paper.json": "342e0ea3f379f9952f950fe58e7232964b610462ff9ae7c727f05faa007fd658",
+    "quakes.json": "f5e61cedfc18b3c454d1a8ea2e2588df2c04fd7f5aaf5de802c08204183cbc8b",
+    "sourdough.json": "e6fcfe8d9bfd165616e8fbb04eb0b4a788edf4b00848e259b39465b5d85f3b7a",
+    "weather.json": "d1a658def3e54edb312263be3b3fa439a60988aab2b24d464d2e016e4f61bca0"
+  },
+  "execution": {
+    "initial_cash": 10000,
+    "fee_bps": 90,
+    "spread_bps": 10,
+    "slippage_bps": 5,
+    "data_delay_ms": 100,
+    "latency_ms": 250
+  },
+  "publication_assumptions": [
+    "Wikimedia days are measured at UTC day completion; an explicit additional 48-hour historical lag is assumed, not verified release vintages. Counts reflect the retrieved archive and may be revised.",
+    "Open-Meteo reanalysis days complete at UTC day end; a seven-day lag is only an exploratory scenario, not a reconstruction of forecast/reanalysis vintages. This trial trades reported rainfall, not forecast skill.",
+    "USGS uses supplied actual last-update timestamps; daily event counts become eligible only after the completed bucket and every included update. Historical revisions published after the test period are excluded. Count reflects the complete returned query, not a live original-release archive.",
+    "All five thresholds and model settings were fixed before these fetched returns were inspected. Five related hypotheses and a single selected period remain multiple exploratory tests."
+  ],
+  "trials": [
+    {
+      "name": "Rubber-duck debugging rally",
+      "plain_language": {
+        "entry": "col('duck_views') > mean(col('duck_views'), 7)",
+        "exit": "col('duck_views') < mean(col('duck_views'), 7)",
+        "sizing": "cash",
+        "weight": 1.0,
+        "signals": [],
+        "amount": 100.0
+      },
+      "mode": "algorithm",
+      "compiled_automatically": true,
+      "evaluation": {
+        "start": "2025-01-01T00:00:00+00:00",
+        "end": "2025-10-02T00:00:00+00:00",
+        "bars": 274,
+        "note": "This is the actual portfolio/benchmark evaluation window. The research input period can also contain earlier model-training and indicator-warmup observations."
+      },
+      "return": -0.03608226561450045,
+      "benchmark_return": 0.2123573602247426,
+      "excess_return": -0.24843962583924306,
+      "fills": 204,
+      "fees": 295.5473087915593,
+      "drawdown": -0.03740038321256267,
+      "cost_stress_return": -0.06505670870540214,
+      "evidence": {
+        "method": "Paired circular moving-block bootstrap of net per-bar strategy-minus-benchmark returns",
+        "bars": 273,
+        "block_bars": 7,
+        "samples": 300,
+        "seed": 20261030,
+        "mean_excess_return_per_bar": -0.0010807490062756024,
+        "mean_excess_95pct_interval": [
+          -0.0033582383925131382,
+          0.0011561216486617371
+        ],
+        "effective_blocks": 39.0,
+        "limitations": [
+          "Conditional on this observed period and chosen block length; does not correct data revisions, model misspecification, strategy selection or all multiple testing.",
+          "Overlapping labels and a slowly updated feature do not create independent daily evidence. A positive interval is not a probability of future profitability."
+        ],
+        "status": "Exploratory uncertainty, conditional on supplied data"
+      },
+      "model_test": null,
+      "negative_control": {
+        "fills": 0,
+        "blocked_future_data": true
+      },
+      "dataset_identity": "e45cea306c93934e9a0c10ffab2ce6f3a5b963dfcb3b2effd4927830a68f3724",
+      "question": "Buy $100 of BTC when interest in rubber-duck debugging is above its seven-bar average; sell when it falls below."
+    },
+    {
+      "name": "Toilet-paper panic scroll",
+      "plain_language": {
+        "entry": "pct_change(col('paper_views'), 7) > 0.1",
+        "exit": "pct_change(col('paper_views'), 7) < -0.05",
+        "sizing": "cash",
+        "weight": 1.0,
+        "signals": [],
+        "amount": 100.0
+      },
+      "mode": "algorithm",
+      "compiled_automatically": true,
+      "evaluation": {
+        "start": "2025-01-01T00:00:00+00:00",
+        "end": "2025-10-02T00:00:00+00:00",
+        "bars": 274,
+        "note": "This is the actual portfolio/benchmark evaluation window. The research input period can also contain earlier model-training and indicator-warmup observations."
+      },
+      "return": -0.0010031820612639297,
+      "benchmark_return": 0.2123573602247426,
+      "excess_return": -0.21336054228600654,
+      "fills": 95,
+      "fees": 124.8999393421821,
+      "drawdown": -0.005957799735594516,
+      "cost_stress_return": -0.01337388465563949,
+      "evidence": {
+        "method": "Paired circular moving-block bootstrap of net per-bar strategy-minus-benchmark returns",
+        "bars": 273,
+        "block_bars": 7,
+        "samples": 300,
+        "seed": 20261030,
+        "mean_excess_return_per_bar": -0.0009498392668500156,
+        "mean_excess_95pct_interval": [
+          -0.003245866764095384,
+          0.0012769961681800665
+        ],
+        "effective_blocks": 39.0,
+        "limitations": [
+          "Conditional on this observed period and chosen block length; does not correct data revisions, model misspecification, strategy selection or all multiple testing.",
+          "Overlapping labels and a slowly updated feature do not create independent daily evidence. A positive interval is not a probability of future profitability."
+        ],
+        "status": "Exploratory uncertainty, conditional on supplied data"
+      },
+      "model_test": null,
+      "negative_control": {
+        "fills": 0,
+        "blocked_future_data": true
+      },
+      "dataset_identity": "e45cea306c93934e9a0c10ffab2ce6f3a5b963dfcb3b2effd4927830a68f3724",
+      "question": "Buy $100 of BTC when toilet-paper pageviews rise by more than 10% over seven bars; sell after a fall of more than 5%."
+    },
+    {
+      "name": "Sourdough predicts panic browsing",
+      "plain_language": "Explicit reviewed natural-language target: predict whether the available toilet-paper pageviews will exceed their trailing seven-bar average three bars ahead, using sourdough and rubber-duck interest; target 50% BTC when probability exceeds .55.",
+      "mode": "model",
+      "compiled_automatically": false,
+      "evaluation": {
+        "start": "2025-08-08T00:00:00+00:00",
+        "end": "2025-10-02T00:00:00+00:00",
+        "bars": 55,
+        "note": "This is the actual portfolio/benchmark evaluation window. The research input period can also contain earlier model-training and indicator-warmup observations."
+      },
+      "return": 0.0,
+      "benchmark_return": 0.008511894964152722,
+      "excess_return": -0.008511894964152722,
+      "fills": 0,
+      "fees": 0,
+      "drawdown": 0.0,
+      "cost_stress_return": 0.0,
+      "evidence": {
+        "method": "Paired circular moving-block bootstrap of net per-bar strategy-minus-benchmark returns",
+        "bars": 54,
+        "block_bars": 4,
+        "samples": 300,
+        "seed": 20261030,
+        "mean_excess_return_per_bar": -0.00029929713034418484,
+        "mean_excess_95pct_interval": [
+          -0.004226675478828864,
+          0.0036748884208487936
+        ],
+        "effective_blocks": 13.5,
+        "limitations": [
+          "Conditional on this observed period and chosen block length; does not correct data revisions, model misspecification, strategy selection or all multiple testing.",
+          "Overlapping labels and a slowly updated feature do not create independent daily evidence. A positive interval is not a probability of future profitability."
+        ],
+        "status": "Exploratory uncertainty, conditional on supplied data"
+      },
+      "model_test": {
+        "rows": 52,
+        "mse": 0.24845922494953238,
+        "mae": 0.49343331592376755,
+        "prediction_mean": 0.4326516853710817,
+        "prediction_min": 0.2854145780738671,
+        "prediction_max": 0.4496382374818226,
+        "residual_mean": -0.02880553152492786,
+        "training_mean_baseline_mse": 0.24223372781065086,
+        "log_loss": 0.6908448727208323,
+        "brier_score": 0.24845922494953238,
+        "accuracy": 0.5961538461538461,
+        "directional_accuracy": 0.5961538461538461,
+        "confusion_matrix": [
+          [
+            31,
+            0
+          ],
+          [
+            21,
+            0
+          ]
+        ]
+      },
+      "negative_control": {
+        "blocked_future_data": true,
+        "error": "Need at least 12 train, 6 validation and 6 test rows after missing-value filtering and horizon purging"
+      },
+      "dataset_identity": "e45cea306c93934e9a0c10ffab2ce6f3a5b963dfcb3b2effd4927830a68f3724",
+      "question": "Use sourdough and rubber-duck interest to predict whether available toilet-paper pageviews will exceed their seven-bar average three bars ahead; target 50% BTC if probability exceeds 0.55, otherwise exit."
+    },
+    {
+      "name": "Rain in the desert",
+      "plain_language": {
+        "entry": "col('rain_mm') > 0.1",
+        "exit": "col('rain_mm') < 0.1",
+        "sizing": "cash",
+        "weight": 1.0,
+        "signals": [],
+        "amount": 100.0
+      },
+      "mode": "algorithm",
+      "compiled_automatically": true,
+      "evaluation": {
+        "start": "2025-01-01T00:00:00+00:00",
+        "end": "2025-10-02T00:00:00+00:00",
+        "bars": 274,
+        "note": "This is the actual portfolio/benchmark evaluation window. The research input period can also contain earlier model-training and indicator-warmup observations."
+      },
+      "return": -0.003943096306145533,
+      "benchmark_return": 0.2123573602247426,
+      "excess_return": -0.21630045653088814,
+      "fills": 39,
+      "fees": 42.845397901668974,
+      "drawdown": -0.0040377557809818665,
+      "cost_stress_return": -0.008154896680922508,
+      "evidence": {
+        "method": "Paired circular moving-block bootstrap of net per-bar strategy-minus-benchmark returns",
+        "bars": 273,
+        "block_bars": 7,
+        "samples": 300,
+        "seed": 20261030,
+        "mean_excess_return_per_bar": -0.0009607617249130558,
+        "mean_excess_95pct_interval": [
+          -0.0032744439859468686,
+          0.0013203563634936017
+        ],
+        "effective_blocks": 39.0,
+        "limitations": [
+          "Conditional on this observed period and chosen block length; does not correct data revisions, model misspecification, strategy selection or all multiple testing.",
+          "Overlapping labels and a slowly updated feature do not create independent daily evidence. A positive interval is not a probability of future profitability."
+        ],
+        "status": "Exploratory uncertainty, conditional on supplied data"
+      },
+      "model_test": null,
+      "negative_control": {
+        "fills": 0,
+        "blocked_future_data": true
+      },
+      "dataset_identity": "2f6393823fefcc2b65a1a8ae4c736fc757df1420f0ad45b2458fc02b260e8ed5",
+      "question": "Buy $100 of BTC when the last available daily Las Vegas rain report exceeds 0.1 mm; exit when it is below 0.1 mm."
+    },
+    {
+      "name": "A shaky planet and digital gold",
+      "plain_language": {
+        "entry": "col('event_count') > mean(col('event_count'), 7)",
+        "exit": "col('event_count') < mean(col('event_count'), 7)",
+        "sizing": "cash",
+        "weight": 1.0,
+        "signals": [],
+        "amount": 100.0
+      },
+      "mode": "algorithm",
+      "compiled_automatically": true,
+      "evaluation": {
+        "start": "2025-01-01T00:00:00+00:00",
+        "end": "2025-10-02T00:00:00+00:00",
+        "bars": 274,
+        "note": "This is the actual portfolio/benchmark evaluation window. The research input period can also contain earlier model-training and indicator-warmup observations."
+      },
+      "return": 0.0,
+      "benchmark_return": 0.2123573602247426,
+      "excess_return": -0.2123573602247426,
+      "fills": 0,
+      "fees": 0,
+      "drawdown": 0.0,
+      "cost_stress_return": 0.0,
+      "evidence": {
+        "method": "Paired circular moving-block bootstrap of net per-bar strategy-minus-benchmark returns",
+        "bars": 273,
+        "block_bars": 7,
+        "samples": 300,
+        "seed": 20261030,
+        "mean_excess_return_per_bar": -0.0009462929514769176,
+        "mean_excess_95pct_interval": [
+          -0.003254234478645195,
+          0.001332536888621227
+        ],
+        "effective_blocks": 39.0,
+        "limitations": [
+          "Conditional on this observed period and chosen block length; does not correct data revisions, model misspecification, strategy selection or all multiple testing.",
+          "Overlapping labels and a slowly updated feature do not create independent daily evidence. A positive interval is not a probability of future profitability."
+        ],
+        "status": "Exploratory uncertainty, conditional on supplied data"
+      },
+      "model_test": null,
+      "negative_control": {
+        "fills": 0,
+        "blocked_future_data": true
+      },
+      "dataset_identity": "246ad34cc59ddbc98a6c4dc277845b15095823c2910b40e1a1f9c3783ce46364",
+      "question": "Buy $100 of BTC when the available daily count of magnitude 4.5+ earthquakes is above its seven-bar average; exit when below."
+    }
+  ],
+  "limits": [
+    "No actual private sales, borrowing data, options chains, funding tape or professional broker entitlement was supplied.",
+    "These actual-data tests use the declared coarse bar backend; fine-event and multi-contract paths are independently tested with controlled quote/cash-flow fixtures.",
+    "No threshold was tuned to improve the reported test returns. Three predeclared model penalties use validation only; final model return is held-out. Positive historical return is not evidence of repeatable future profitability."
+  ]
+}

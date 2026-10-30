@@ -8,7 +8,7 @@ import math
 import operator
 import re
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 from .data import Bar
 from .engine import Decision
@@ -53,6 +53,7 @@ class SignalInterpreter:
         self.rows = rows
         self.size = len(rows)
         self.columns = set().union(*(row.keys() for row in rows))
+        self.work = 0
 
     def run(self, expression: str) -> Vector:
         if not isinstance(expression, str) or not 1 <= len(expression.strip()) <= 2000:
@@ -65,6 +66,7 @@ class SignalInterpreter:
             ) from None
         if len(list(ast.walk(tree))) > 160:
             raise ValueError("Signal expression exceeds the 160-node complexity budget")
+        self.work = 0
         return self._node(tree.body, 0)
 
     def _column(self, name: str) -> Vector:
@@ -223,7 +225,7 @@ class SignalInterpreter:
                 "log": math.log,
                 "minimum": min,
                 "maximum": max,
-                "clip": lambda x, lo, hi: min(hi, max(lo, x)),
+                "clip": _clip,
                 "distance_km": _distance,
                 "inside_box": _inside_box,
             }
@@ -262,43 +264,50 @@ class SignalInterpreter:
             return self._apply(operator.sub, values, previous)
         if name == "pct_change":
             return self._apply(lambda a, b: a / b - 1, values, previous)
-        total = average = moment = 0.0
-        present = 0
+        self.work += self.size * window
+        if self.work > 10_000_000:
+            raise ValueError(
+                "Trailing calculation budget exceeded; reduce rows, windows or nested calculations"
+            )
         result: Vector = []
-        for index, value in enumerate(values):
-            old_value = values[index - window] if index >= window else None
-            if old_value is not None:
-                old = float(bool(old_value)) if name == "count" else float(old_value)
-                total -= old
-                if present > 1:
-                    reduced_average = average + (average - old) / (present - 1)
-                    moment = max(0.0, moment - (old - average) * (old - reduced_average))
-                    average = reduced_average
-                else:
-                    average = moment = 0.0
-                present -= 1
-            if value is not None:
-                number = float(bool(value)) if name == "count" else float(value)
-                total += number
-                present += 1
-                delta = number - average
-                average += delta / present
-                moment += delta * (number - average)
-            if index + 1 < window or present < window:
+        for index in range(self.size):
+            if index + 1 < window:
                 result.append(None)
-            elif name in {"sum", "count"}:
-                result.append(_finite(total))
+                continue
+            items = values[index + 1 - window : index + 1]
+            if any(item is None for item in items):
+                result.append(None)
+                continue
+            numbers = [
+                float(bool(item)) if name == "count" else float(cast(float, item)) for item in items
+            ]
+            if name in {"sum", "count"}:
+                try:
+                    total = math.fsum(numbers)
+                except OverflowError:
+                    scale = max(abs(number) for number in numbers)
+                    total = (
+                        math.fsum(number / scale for number in numbers) * scale if scale else 0.0
+                    )
+                result.append(total if math.isfinite(total) else None)
             elif name == "mean":
-                result.append(_finite(total / window))
+                # Divide before summing so a finite mean does not require a finite sum.
+                result.append(math.fsum(number / window for number in numbers))
             else:
-                assert value is not None
-                variance = max(0.0, moment / window)
+                scale = max(abs(number) for number in numbers)
+                normalized = [number / scale for number in numbers] if scale else [0.0] * window
+                average = math.fsum(normalized) / window
+                variance = math.fsum((number - average) ** 2 for number in normalized) / window
                 result.append(
-                    0.0
-                    if variance < 1e-20
-                    else _finite((float(value) - average) / math.sqrt(variance))
+                    0.0 if variance == 0 else (normalized[-1] - average) / math.sqrt(variance)
                 )
         return result
+
+
+def _clip(value: float, lower: float, upper: float) -> float:
+    if lower > upper:
+        raise ValueError("clip lower bound exceeds upper bound")
+    return min(upper, max(lower, value))
 
 
 def _distance(lat: float, lon: float, target_lat: float, target_lon: float) -> float:
@@ -424,8 +433,118 @@ def algorithm_decisions(rows: list[dict], algorithm: dict) -> tuple[list[Decisio
     }
 
 
+def _spoken_condition(clause: str, fields: list[str]) -> str:
+    """Compile an explicit, small sentence grammar; never guess absent measurements."""
+    clause = clause.strip().strip(".")
+    fields = list(dict.fromkeys(fields + ["market.close", "market.volume", "market.return_1"]))
+
+    def column(alias: str) -> str:
+        normalized = re.sub(r"[_.-]+", " ", alias.casefold()).strip()
+        normalized = re.sub(r"\s+", " ", normalized)
+        aliases = {
+            "price": "market.close",
+            "market price": "market.close",
+            "closing price": "market.close",
+        }
+        name = aliases.get(normalized) or next(
+            (
+                field
+                for field in fields
+                if re.sub(r"[_.-]+", " ", field.casefold()).strip() == normalized
+            ),
+            None,
+        )
+        if name is None:
+            raise ValueError(f"Choose a measured column for: {alias}")
+        return f"col({name!r})"
+
+    words = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "twenty": 20,
+        "thirty": 30,
+    }
+    clause = re.sub(
+        r"\b(" + "|".join(words) + r")(?=[ -]+(?:market[ -]+)?(?:bar|day|period))",
+        lambda m: str(words[m[1].casefold()]),
+        clause,
+        flags=re.I,
+    )
+    number = r"(-?\d+(?:\.\d+)?)"
+    comparisons = r"(>=|<=|!=|==|>|<|is greater than|is less than|greater than|less than|more than|at least|at most|is above|is below|above|below|equals)"
+    operators = {
+        "is greater than": ">",
+        "is less than": "<",
+        "greater than": ">",
+        "more than": ">",
+        "less than": "<",
+        "at least": ">=",
+        "at most": "<=",
+        "is above": ">",
+        "above": ">",
+        "is below": "<",
+        "below": "<",
+        "equals": "==",
+    }
+    # Try a whole measured field before splitting conjunctions inside a field name.
+    match = re.fullmatch(r"(.+?)\s*" + comparisons + r"\s*" + number + r"\s*(%)?", clause, re.I)
+    if match:
+        alias, op, value, percent = match.groups()
+        try:
+            selected = column(alias)
+        except ValueError:
+            pass
+        else:
+            level = float(value) / (100 if percent else 1)
+            return f"{selected} {operators.get(op.casefold(), op)} {level!r}"
+    for connective in ("or", "and"):
+        parts = re.split(r"\s+" + connective + r"\s+", clause, flags=re.I)
+        if len(parts) > 1:
+            return (" " + connective + " ").join(
+                "(" + _spoken_condition(part, fields) + ")" for part in parts
+            )
+    match = re.fullmatch(
+        r"(.+?)\s+(?:is\s+)?(above|below)\s+(?:its|the)\s+(\d+)[ -]+(?:market[ -]+)?(?:bar|day|period)[ -]+(?:moving\s+)?average",
+        clause,
+        re.I,
+    )
+    if match:
+        alias, op, window = match.groups()
+        name = column(alias)
+        if not 1 <= int(window) <= 1000:
+            raise ValueError("Choose a trailing window from 1 to 1,000 bars")
+        return f"{name} {'>' if op.casefold() == 'above' else '<'} mean({name}, {int(window)})"
+    match = re.fullmatch(
+        r"(.+?)\s+(rises|falls|increases|decreases)\s+by\s+(more than|at least|less than|at most)?\s*"
+        + number
+        + r"\s*%\s+over\s+(\d+)[ -]+(?:market[ -]+)?(?:bars?|days?|periods?)",
+        clause,
+        re.I,
+    )
+    if match:
+        alias, direction, comparison, value, window = match.groups()
+        name = column(alias)
+        if not 1 <= int(window) <= 1000:
+            raise ValueError("Choose a trailing window from 1 to 1,000 bars")
+        level = float(value) / 100
+        op = operators.get((comparison or "at least").casefold(), ">=")
+        if direction.casefold() in {"falls", "decreases"}:
+            level = -level
+            op = {">": "<", ">=": "<=", "<": ">", "<=": ">="}[op]
+        return f"pct_change({name}, {int(window)}) {op} {level!r}"
+    raise ValueError(f"Specify a measured comparison or trailing change: {clause}")
+
+
 def plan_algorithm(description: str, fields: list[str]) -> dict:
-    """Propose only fully supported wording; arbitrary prose stays an unresolved draft."""
+    """Draft a bounded natural-language rule without inventing measurements."""
     if not isinstance(description, str) or not 5 <= len(description.strip()) <= 2000:
         raise ValueError("Describe the algorithm in 5..2,000 characters")
     if (
@@ -436,59 +555,42 @@ def plan_algorithm(description: str, fields: list[str]) -> dict:
         raise ValueError("Provide the mapped field names")
     text = description.strip().rstrip(".")
     clauses = re.fullmatch(
-        r"buy(?:\s+(?:bitcoin|btc|the asset))?\s+when\s+(.+?)(?:\s*(?:;|,?\s+and)?\s*sell\s+when\s+(.+))?",
+        r"buy(?:\s+\$([0-9]+(?:\.[0-9]+)?))?(?:\s+(?:bitcoin|btc|the asset))?\s+when\s+(.+?)(?:\s*(?:;|,?\s+and)?\s*sell\s+when\s+(.+))?",
         text,
         re.I,
     )
-    draft = {"entry": "", "exit": "", "sizing": "target", "weight": 1.0, "signals": []}
+    draft: dict[str, Any] = {
+        "entry": "",
+        "exit": "",
+        "sizing": "target",
+        "weight": 1.0,
+        "signals": [],
+    }
     unresolved = []
     if clauses:
-        for key, clause in zip(("entry", "exit"), clauses.groups()):
-            if clause is None:
-                continue
-            match = re.fullmatch(
-                r"(.+?)\s*(>=|<=|!=|==|>|<|is above|is below|above|below|equals)\s*(-?\d+(?:\.\d+)?)",
-                clause.strip(),
-                re.I,
-            )
-            if match:
-                alias, op, value = match.groups()
-                name = next(
-                    (
-                        field
-                        for field in fields
-                        if field.casefold().replace("_", " ")
-                        == alias.strip().casefold().replace("_", " ")
-                    ),
-                    None,
-                )
-                if name is not None:
-                    comparison = {
-                        "is above": ">",
-                        "above": ">",
-                        "is below": "<",
-                        "below": "<",
-                        "equals": "==",
-                    }.get(op.casefold(), op)
-                    draft[key] = f"col({name!r}) {comparison} {float(value):g}"
-                    continue
-            unresolved.append(
-                f"Map the {key} clause to measured columns and an explicit condition: {clause}"
-            )
+        amount, entry, exit_clause = clauses.groups()
+        if amount:
+            draft.update(sizing="cash", amount=float(amount))
+        for key, clause in (("entry", entry), ("exit", exit_clause)):
+            if clause is not None:
+                try:
+                    draft[key] = _spoken_condition(clause, fields)
+                except ValueError as error:
+                    unresolved.append(str(error))
     else:
         unresolved.append(
-            "Use the visual signal builder, or describe 'buy when FIELD > NUMBER; sell when FIELD < NUMBER'. Complex wording requires a reviewed expression or your optional LLM."
+            "Choose a measured comparison, trailing change or model task. Free-form ideas require reviewed data/target/decision definitions or your optional LLM; no rule was invented."
         )
     if not draft["entry"]:
         unresolved.append(
-            "No executable entry was inferred. Select the actual measured field; no geographic or economic proxy was substituted."
+            "No executable entry was inferred; map the actual measured quantity first."
         )
     return {
         "draft": draft,
         "executable": bool(draft["entry"]) and not unresolved,
         "clarifications": unresolved,
         "warnings": [
-            "Review every condition. This proposal is not proof that data exists or that a trading edge is present."
+            "Review every measurement, amount, condition and historical availability. This draft does not establish data coverage or a trading edge."
         ],
         "functions": FUNCTIONS,
     }

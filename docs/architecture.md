@@ -1,6 +1,6 @@
 # Actual system architecture
 
-The supported v0.3 package is `src/hypothesis_lab`, a student project for historical strategy research and simulated paper trading. A standard-library Python service binds to `127.0.0.1` and serves the guided studio and dark market terminal. There is no Node build step, mandatory cloud service, account, telemetry or paid core dependency. GitHub Pages serves the static landing page and documentation, not research execution.
+The supported v0.4 package is `src/hypothesis_lab`, a student project for historical strategy research and simulated paper trading. A standard-library Python service binds to `127.0.0.1` and serves the guided studio and dark market terminal. There is no Node build step, mandatory cloud service, account, telemetry or paid core dependency. GitHub Pages serves the static landing page and documentation, not research execution.
 
 ## Shared research flow
 
@@ -11,7 +11,7 @@ Question -> reviewable data requirements and candidate-source search
   -> chosen numeric/categorical/text inputs and causal transformations
   -> rule intent, trained baseline or user-model inference
   -> explicit output-to-trade policy
-  -> next-open execution, costs, cash and position accounting
+  -> selected bar, quote/depth/trade or linked-contract execution, costs and accounting
   -> compatible benchmark, metrics, ledger and discrepancy inspection
   -> session record, optional local save and explicit export
 ```
@@ -59,8 +59,6 @@ Optional source requests go directly from the local app to the selected public p
 
 ## Execution and release boundaries
 
-The simulator covers one instrument, long-only fractional spot holdings and market fills at the first supplied later open eligible after publication, optional inference readiness and order latency. Even a small delay can defer a whole coarse bar; this is not intrabar execution reconstruction. It does not implement synchronized multi-asset portfolios, order books, margin, advanced orders, corporate actions, real-money brokerage or a persistent forward paper-trading service. The original source in `legacy/` is preserved but not imported by the supported launcher; the audit explains why.
+The base simulator covers one long-only fractional spot instrument at eligible supplied opens. The optional `microstructure` backend uses observed quote/depth/trade receipt events for partial fills and explicit passive-queue assumptions. The `portfolio` backend uses signed multi-contract positions, shared-currency collateral, observed quotes and declared funding/dividend/margin/settlement/exercise events. See [replay](execution-replay.md) and [linked contracts](linked-contracts.md). Neither reconstructs missing intrabar or exchange-priority evidence from OHLC. There is no real-money brokerage, broker-exact portfolio margin, cross-currency collateral, automatic stochastic assignment or persistent forward trading service. The original `legacy/` source is preserved but not imported by the supported launcher; the audit explains why.
 
-The release is source and small redistributable fixtures, not an AI/model appliance. Packaging enforces a 20 MB source ZIP budget and a 10 MB per-source-file budget, with allowlists and exclusions for user datasets, credentials, environments, caches and model weights. Optional runtimes, SDKs and large model files are installed or operated separately by the user.
-
-See [research workflow](research-workflow.md), [model inputs](model-inputs.md), [data sources](data-sources.md), [settings](settings.md) and [implementation status](../IMPLEMENTATION_STATUS.md).
+Optional `compute` sends explicit user tasks/local manifests or authorized inline tables to a user-operated extractor/trainer. Results are validated structured data and reusable prediction configuration. No generated Python, weight installation or operator backend is involved. `scenarios` supplies fixed synthetic pipeline trials, while the dated public-data report is a separately labeled retrospective study. `validation` summarizes conditional return uncertainty with paired blocks, not edge certification.

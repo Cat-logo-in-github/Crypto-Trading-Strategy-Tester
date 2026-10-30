@@ -158,6 +158,41 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(403, {"error": "Open the local application to export experiments"})
                     return
                 self._send(200, self.server.experiment(path.rsplit("/", 1)[-1]))
+            elif path == "/api/public-results":
+                self._send(
+                    200,
+                    json.loads(
+                        (
+                            Path(__file__).with_name("fixtures") / "public-strategy-results.json"
+                        ).read_text(encoding="utf-8")
+                    ),
+                )
+            elif path == "/api/scenarios":
+                from .scenarios import catalogue, scenario_payload
+
+                identity = parse_qs(urlsplit(self.path).query).get("id", [""])[0]
+                self._send(
+                    200,
+                    {
+                        "scenario": next((x for x in catalogue() if x["id"] == identity), None),
+                        "payload": scenario_payload(identity),
+                    }
+                    if identity
+                    else {"scenarios": catalogue()},
+                )
+            elif path == "/api/portfolio/templates":
+                from .portfolio_templates import catalogue, template_payload
+
+                identity = parse_qs(urlsplit(self.path).query).get("id", [""])[0]
+                self._send(
+                    200,
+                    {
+                        "template": next((x for x in catalogue() if x["id"] == identity), None),
+                        "payload": template_payload(identity),
+                    }
+                    if identity
+                    else {"templates": catalogue()},
+                )
             elif path == "/api/execution/profiles":
                 from .costs import execution_profiles
 
@@ -171,6 +206,10 @@ class Handler(BaseHTTPRequestHandler):
                 "/studio.js",
                 "/studio.css",
                 "/favicon.svg",
+                "/lab.js",
+                "/lab.css",
+                "/portfolio-ui.js",
+                "/portfolio-ui.css",
             }:
                 name = "index.html" if path == "/" else path[1:]
                 file = Path(__file__).with_name("static") / name
@@ -204,6 +243,7 @@ class Handler(BaseHTTPRequestHandler):
                     "/api/run",
                     "/api/import",
                     "/api/model/inspect",
+                    "/api/compute",
                     "/api/dataset/inspect",
                     "/api/dataset/market",
                     "/api/algorithm/preview",
@@ -228,12 +268,22 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/import",
                 "/api/rerun",
                 "/api/algorithm/preview",
+                "/api/scenarios/run",
             }:
                 if not self.server.run_lock.acquire(blocking=False):
                     self._send(409, {"error": "An experiment is already running"})
                     return
                 try:
-                    if path == "/api/algorithm/preview":
+                    if path == "/api/scenarios/run":
+                        from .scenarios import run_scenarios
+
+                        identity = payload.get("id")
+                        value = run_scenarios(
+                            [identity] if identity else None,
+                            include_controls=payload.get("include_controls") is not False,
+                            include_records=payload.get("include_records") is True,
+                        )
+                    elif path == "/api/algorithm/preview":
                         preview = run_experiment({**payload, "mode": "algorithm"}, persist=False)
                         value = {
                             "preview": preview["diagnostics"]["inference_decisions"][:20],
@@ -315,6 +365,20 @@ class Handler(BaseHTTPRequestHandler):
                         search_sources(payload.get("query", ""), payload.get("catalog", "socrata"))
                         if path.endswith("search")
                         else fetch_source(payload.get("config", {}), payload.get("credential"))
+                    )
+                finally:
+                    self.server.provider_lock.release()
+            elif path == "/api/compute":
+                from .compute import run_compute
+
+                if not self.server.provider_lock.acquire(blocking=False):
+                    self._send(429, {"error": "A user-service/data request is already running"})
+                    return
+                try:
+                    value = run_compute(
+                        payload.get("connection", {}),
+                        payload.get("request", {}),
+                        payload.get("credential"),
                     )
                 finally:
                     self.server.provider_lock.release()

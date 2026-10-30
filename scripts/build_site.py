@@ -143,6 +143,10 @@ def build(destination: Path) -> int:
             target = destination / asset.relative_to(source)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(asset, target)
+    report = ROOT / "docs" / "public-strategy-results.json"
+    if report.is_file():
+        (destination / "docs").mkdir(exist_ok=True)
+        shutil.copyfile(report, destination / "docs" / report.name)
     count = 0
     for document in (ROOT / "docs").rglob("*.md"):
         relative = document.relative_to(ROOT).with_suffix(".html")

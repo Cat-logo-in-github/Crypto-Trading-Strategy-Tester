@@ -1,5 +1,7 @@
 # Backtesting methodology and metric conventions
 
+The timing/accounting conventions below describe the **base bar backend**. Version 0.4 also provides [observed quote/depth/trade replay](execution-replay.md) and [signed linked-contract portfolios](linked-contracts.md), with their own event clocks, liquidity, collateral and cash-flow contracts. Select the appropriate backend and evidence for the hypothesis. A single-instrument bar limitation does not describe every supported path.
+
 ## Information and execution timing
 
 A market `Bar.timestamp` is the interval's **open** time. Its OHLC values are available after `timestamp + bar_seconds + data_delay_ms/1000`. The interval is explicitly configured. A decision's readiness is the later of that time and an optional `Decision.available_at`; `latency_ms` then delays eligibility. It fills at the first supplied later bar open at or after eligibility. With zero delay this is the next open. Intents without a remaining eligible open expire without a fee. Gaps are retained.

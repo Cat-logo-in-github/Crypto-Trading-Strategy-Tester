@@ -67,3 +67,10 @@ python -m unittest discover -s tests -v
 ```
 
 CLI output is written only when an output path is supplied; those commands do not automatically save UI history.
+
+
+## Broader trials and linked contracts
+
+Open **Strategy lab** to run five synthetic pipeline checks or connect your own extraction/training service. Under **Models & inference**, choose **My future condition** for a custom Boolean target; review inputs, horizon, threshold and action independently. Apply a returned service table or prediction connection only after reviewing it.
+
+Open **Multi-leg contracts**, choose one of the five recipes, then **Load synthetic contract example**. Review signed leg quantities, measured conditions, quotes/cash-flow events, margin and financing. Replace inputs for real research, then run. Inspect the separate per-contract ledger and cash benchmark; one spot candle chart cannot describe the basket. See [linked contracts](linked-contracts.md).

@@ -58,7 +58,7 @@
     if(size<=0||($("setup-action").value==="target"&&size>1))throw new Error("Choose a positive cash budget, or a target weight greater than zero and at most one.");
     return {entry,exit,sizing:$("setup-action").value==="cash"?"cash":"target",amount:size,weight:size,signals};
   }
-  function period(){const mode=$("setup-period").value;if(mode==="all")return {};if(mode==="recent")return {last_bars:finite("setup-recent-bars","Recent bars")};if(mode!=="custom")return {last_bars:Number(mode)};const start=$("setup-start").value,end=$("setup-end").value;if(start&&end&&start>end)throw new Error("The start date must precede the end date.");return {...(start?{start}:{}),...(end?{end}:{})};}
+  function period(){const mode=$("setup-period").value;if(mode==="all")return {};if(mode==="recent")return {last_bars:finite("setup-recent-bars","Recent bars")};if(mode!=="custom")return {last_bars:Number(mode)};const startValue=$("setup-start").value,endValue=$("setup-end").value,start=startValue&&$("setup-start").type==="datetime-local"?startValue+"Z":startValue,end=endValue&&$("setup-end").type==="datetime-local"?endValue+"Z":endValue;if(start&&end&&start>end)throw new Error("The start date must precede the end date.");return {...(start?{start}:{}),...(end?{end}:{})};}
   const previousExecution=execution;
   execution=function(){return {...previousExecution(),fixed_fee:Number($("setup-fixed-fee").value),spread_bps:Number($("setup-spread").value)*100,data_delay_ms:Number($("setup-data-delay").value),latency_ms:Number($("setup-latency").value)};};
   const previousPayload=payload;
@@ -124,7 +124,7 @@
     setValue("generic-workflow",$("setup-model-workflow").value);setValue("model-target",$("setup-target").value);setValue("model-target-type",$("setup-target-type").value);setValue("generic-horizon",$("setup-horizon").value);setValue("inference-comparison",$("setup-output-comparison").value);setValue("inference-threshold",$("setup-output-threshold").value);setValue("inference-action",$("setup-action").value==="cash"?"cash":"target");setValue("inference-size",$("setup-size").value);setValue("inference-false",$("setup-exit-mode").value==="hold"?"hold":"exit");
     const chosen=new Set([...$("setup-model-inputs").querySelectorAll("input:checked")].map(el=>el.value));document.querySelectorAll('input[name="generic-feature"]').forEach(el=>el.checked=chosen.has(el.value));updateInferenceSummary();
   }
-  function shortEndpointWindow(){if($("setup-model-workflow").value==="endpoint"&&$("setup-period").value==="all"){$("setup-period").value="recent";$("setup-recent-bars").value=Math.min(64,Number($("endpoint-calls").value)||8)+1;}syncControls();}
+  function shortEndpointWindow(){if($("setup-model-workflow").value==="endpoint"&&$("endpoint-kind").value!=="tabular"&&$("setup-period").value==="all"){$("setup-period").value="recent";$("setup-recent-bars").value=Math.min(64,Number($("endpoint-calls").value)||8)+1;}syncControls();}
   $("setup-model-workflow").addEventListener("change",shortEndpointWindow);
   function syncModelFromDesk(){
     for(const [desk,setup] of [["generic-workflow","setup-model-workflow"],["model-target","setup-target"],["model-target-type","setup-target-type"],["generic-horizon","setup-horizon"],["inference-comparison","setup-output-comparison"],["inference-threshold","setup-output-threshold"],["inference-size","setup-size"]])setValue(setup,$(desk).value);

@@ -1,6 +1,20 @@
+# Version 0.4 additions
+
+`GET /api/scenarios` lists five fixed synthetic pipeline trials; `?id=...` includes a runnable payload. `POST /api/scenarios/run` accepts an optional `id`, `include_controls` and `include_records` and returns the actual run/control records without persistence.
+
+`GET /api/portfolio/templates` lists five linked-contract recipes; `?id=...` includes a synthetic contract-mechanics payload. Add `portfolio` to any rule/algorithm/model run for signed leg execution using supplied contract/event specifications; see [linked contracts](../linked-contracts.md). A single cash-buy amount cannot size derivatives; use target exposure plus explicit quantities.
+
+Add `execution_replay` to a normal run for supplied single-instrument quote/depth/trade execution. Optional explicit `execution_intents` use the documented validated market/limit/cancel contract. The original signal generation/training is evaluated once and its fixed decisions use the selected backend. [Replay schema](../execution-replay.md).
+
+`POST /api/compute` accepts `{connection,request,credential?}` for one explicitly selected user-owned extraction/train/evaluate service operation. Returns validated canonical tables, reusable prediction configuration or declared evaluation metrics. Credentials and local manifests are separate session inputs. [Compute schema](../compute-integration.md).
+
+`model_config.target_type="condition"` uses a bounded `target_condition` expression as a Boolean label at t+horizon, with trailing-only inputs and horizon purging. It works with baseline training, numeric uploads and endpoint diagnostics. Tabular endpoint `max_rows` supports a bounded batch up to 5,000; LLM `max_calls` remains a separate request budget. A declared `trained_through` must predate inference.
+
+Results add `evidence` with a deterministic paired moving-block bootstrap of per-bar strategy-minus-benchmark net returns, or an insufficient-history status. This is conditional uncertainty, not certification or a multiple-testing correction. Linked records include per-position ledger/margin, cash flows and risk events; their benchmark is cash with declared interest, not a fictional buy-and-hold basket.
+
 # Public Python and local HTTP APIs
 
-The v0.3 interfaces are small pre-1.0 extension boundaries. Inputs and research records are JSON-compatible; arbitrary browser-submitted Python, pickle and joblib objects are not executed. The core has no runtime dependencies beyond Python's standard library.
+The v0.4 interfaces are small pre-1.0 extension boundaries. Inputs and research records are JSON-compatible; arbitrary browser-submitted Python, pickle and joblib objects are not executed. The core has no runtime dependencies beyond Python's standard library.
 
 ## Guided studio additions
 

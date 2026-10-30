@@ -1,6 +1,17 @@
 # Hypothesis Lab
 
-A free, local-first **student project for historical strategy research and simulated paper trading**. Version 0.3 guides an unusual idea through data, signals, historical duration, execution assumptions and an inspectable experiment. No real orders, account, app-operated backend or mandatory AI service.
+A free, local-first **student project for historical strategy research and simulated paper trading**. Version 0.4 guides an unusual idea through data, signals, historical duration, execution assumptions and an inspectable experiment. No real orders, account, app-operated backend or mandatory AI service.
+
+## Version 0.4: question, model, execution evidence
+
+**New experiment** is the quick start. **Strategy lab** runs five fixed unusual questions across CSV/monthly panels, text/events, GeoJSON, uploaded models and custom future-condition training. These are clearly marked synthetic software checks. [Five separate actual public-data exploratory tests](docs/public-strategy-results.md) show losses and abstention as well as their matched benchmarks; they do not establish an edge.
+
+**Multi-leg contracts** provides the five linked recipes: Volatility Doppelgänger, Funding-Rate Vampire, Catastrophe Calendar, Dividend Exorcist and Correlation Black Hole. Signed legs share collateral and observed executable quotes. Linear-perpetual funding, stock dividend entitlement/payment, option settlement/physical exercise, borrowing, margin and partial liquidation are explicit event inputs. Read [linked contracts](docs/linked-contracts.md) before substituting real history. Contract examples are synthetic mechanics tests, not verified strategies.
+
+For a single instrument, optional [quote/depth/trade replay](docs/execution-replay.md) models actual bid/ask, observed size, partial fills, stale quotes, lot/minimum rules and limit-order queue assumptions. The original bar path remains available when only OHLC exists; a finer execution path requires finer evidence.
+
+The built-in CPU trainer works on any supported dataset mapped to numeric/boolean/categorical/text-derived measurements. Choose inputs, an independent target, horizon and a future Boolean condition, not only temperature or market return. For raw media, specialist formats, large private data or a different framework/model, connect a [user-operated extraction/training service](docs/compute-integration.md); local file manifests stay on the local service path, and its validated feature table/prediction endpoint can be applied in the UI. Heavy model weights and SDKs remain additional user installations.
+
 
 ## Windows: download, extract, open
 
@@ -75,11 +86,11 @@ python scripts/package.py
 
 These produce `dist/site/` and `dist/hypothesis-lab.zip`; the latter excludes keys, user datasets/state, environments, caches, Git history and model weights. Source release budgets are 20 MB per ZIP and 10 MB per included file. The Windows application is a separate portable-runtime artifact, published under the stable download name above.
 
-For GitHub Pages, push the extracted source contents and choose **Settings > Pages > Source > GitHub Actions**. Then publish a normal release tagged **v0.3.0**, targeting the updated source commit. The release workflow builds and attaches both ZIPs; the Pages download button uses the Windows release asset. An ordinary branch push builds artifacts and intentionally skips release publication. After publication, this local build folder can be deleted: GitHub hosts the site, documentation and downloads independently.
+For GitHub Pages, push the extracted source contents and choose **Settings > Pages > Source > GitHub Actions**. Then publish a normal release tagged **v0.4.0**, targeting the updated source commit. The release workflow builds and attaches both ZIPs; the Pages download button uses the Windows release asset. An ordinary branch push builds artifacts and intentionally skips release publication. After publication, this local build folder can be deleted: GitHub hosts the site, documentation and downloads independently.
 
 ## Scope and attribution
 
-Execution is one long-only spot instrument with fractional next-open fills, explicit costs and cash constraints. There is no real-money execution, order-book/liquidity model, margin, corporate-action or tax model. Final holdings are marked at the last close rather than forcibly liquidated. Repeated selection can overfit historical results; prediction accuracy does not establish profitability.
+The base bar backend models one long-only spot instrument with fractional eligible-open fills and cash constraints. Optional quote/depth/trade replay and signed linked-contract execution add observed liquidity, partial fills, margin and explicit funding/dividend/exercise events as documented above. There is no real-money routing, broker-exact portfolio margin, tax or automatic corporate-action inference. End holdings are marked unless explicit settlement or liquidation events apply. Repeated selection can overfit historical results; prediction accuracy does not establish profitability.
 
 Fills use supplied bar opens only. A small positive latency can skip an entire coarse bar; the app does not reconstruct millisecond prices from daily OHLC. Current commission snapshots are not historical vintage fees. Binary/unstructured data needs a user-controlled extraction/model pipeline that emits supported timestamped signals. These boundaries prevent the software from claiming scientifically conclusive or real-exchange accuracy it has not established.
 

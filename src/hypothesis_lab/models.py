@@ -534,8 +534,16 @@ def run_tabular_model(
     if not isinstance(target_field, str) or not target_field:
         raise ValueError("Target field must name a market or external numeric column")
     target_type = settings.get("target_type", "increase")
-    if target_type not in {"increase", "return", "level"}:
-        raise ValueError("Target type must be increase, return or level")
+    if target_type not in {"increase", "return", "level", "condition"}:
+        raise ValueError("Target type must be increase, return, level or condition")
+    binary_target = target_type in {"increase", "condition"}
+    condition_values = None
+    if target_type == "condition":
+        from .algorithms import SignalInterpreter
+
+        condition_values = SignalInterpreter(feature_rows).run(settings.get("target_condition", ""))
+        if any(value is not None and not isinstance(value, bool) for value in condition_values):
+            raise ValueError("Target condition must produce boolean outcomes; use a comparison")
     execution = ExecutionConfig(
         **{
             name: _number(settings.get(name, value), name)
@@ -562,7 +570,11 @@ def run_tabular_model(
     all_names = set().union(*(row.keys() for row in feature_rows))
     if any(name not in all_names for name in names):
         raise ValueError("A selected model input is absent from the aligned dataset")
-    if target_field != "market.close" and target_field not in all_names:
+    if (
+        target_type != "condition"
+        and target_field != "market.close"
+        and target_field not in all_names
+    ):
         raise ValueError("Selected target field is absent from the aligned dataset")
     rows: dict[int, dict[str, float]] = {}
     for index, raw in enumerate(feature_rows):
@@ -580,6 +592,11 @@ def run_tabular_model(
 
     labels = {}
     for index in range(len(bars) - horizon):
+        if condition_values is not None:
+            future_condition = condition_values[index + horizon]
+            if future_condition is not None:
+                labels[index] = float(future_condition)
+            continue
         current, future = target_value(index), target_value(index + horizon)
         if current is None or future is None:
             continue
@@ -656,8 +673,8 @@ def run_tabular_model(
             raise ValueError(
                 "Need at least 12 train, 6 validation and 6 test rows after missing-value filtering and horizon purging"
             )
-        family = settings.get("model_family", "logistic" if target_type == "increase" else "ridge")
-        if (target_type == "increase") != (family == "logistic"):
+        family = settings.get("model_family", "logistic" if binary_target else "ridge")
+        if binary_target != (family == "logistic"):
             raise ValueError(
                 "Use logistic for an increase probability, or ridge for a future level/return"
             )
@@ -700,9 +717,15 @@ def run_tabular_model(
             {
                 "target_field": target_field,
                 "target_type": target_type,
+                **(
+                    {"target_condition": settings["target_condition"]}
+                    if target_type == "condition"
+                    else {}
+                ),
                 "horizon": horizon,
                 "trained_through": (
-                    bars[train[-1] + horizon].timestamp + timedelta(seconds=execution.bar_seconds)
+                    bars[train[-1] + horizon].timestamp
+                    + timedelta(seconds=execution.bar_seconds + execution.data_delay_ms / 1000)
                 ).isoformat(),
             }
         )
@@ -728,7 +751,7 @@ def run_tabular_model(
             warnings.append(
                 "The training target contains only one class; probability estimates cannot learn a class distinction in this period."
             )
-    if kind == "probability" and target_type != "increase":
+    if kind == "probability" and not binary_target:
         warnings.append(
             "Probability output is being compared against a non-binary target. Configure an increase target for classification diagnostics."
         )
@@ -745,7 +768,8 @@ def run_tabular_model(
             {
                 "timestamp": bars[index].timestamp.isoformat(),
                 "decision_at": (
-                    bars[index].timestamp + timedelta(seconds=execution.bar_seconds)
+                    bars[index].timestamp
+                    + timedelta(seconds=execution.bar_seconds + execution.data_delay_ms / 1000)
                 ).isoformat(),
                 "index": index,
                 "bar_index": index,
@@ -757,7 +781,8 @@ def run_tabular_model(
                 if index + horizon < len(bars)
                 else None,
                 "target_label_available_at": (
-                    bars[index + horizon].timestamp + timedelta(seconds=execution.bar_seconds)
+                    bars[index + horizon].timestamp
+                    + timedelta(seconds=execution.bar_seconds + execution.data_delay_ms / 1000)
                 ).isoformat()
                 if index + horizon < len(bars)
                 else None,
@@ -771,7 +796,7 @@ def run_tabular_model(
                 "following_market_return": following.close / following.open - 1,
                 "following_close_return": following.close / bars[index].close - 1,
                 "forecast_correct": ((prediction_map[index] > 0.5) == bool(labels[index]))
-                if kind == "probability" and target_type == "increase" and index in labels
+                if kind == "probability" and binary_target and index in labels
                 else None,
             }
         )
@@ -792,16 +817,14 @@ def run_tabular_model(
             and record["following_market_return"] < 0
         )
     actual_indices = [i for i in inference_indices if i in labels]
-    target_kind = (
-        "probability" if kind == "probability" and target_type == "increase" else "prediction"
-    )
+    target_kind = "probability" if kind == "probability" and binary_target else "prediction"
     test_scores = _diagnostics(
         [labels[index] for index in actual_indices],
         [prediction_map[index] for index in actual_indices],
         target_kind,
         baseline,
     )
-    if target_type == "increase" and kind != "probability":
+    if binary_target and kind != "probability":
         warnings.append(
             "Uploaded numeric scores are not calibrated probabilities. Increase-target diagnostics use residual error, not probability log loss or classification accuracy."
         )
@@ -844,7 +867,9 @@ def run_tabular_model(
             "evaluation_start_index": start,
             **asdict(execution),
         },
-        "target": f"{target_field}[t+{horizon}] {'>' if target_type == 'increase' else '/ current - 1' if target_type == 'return' else 'future level'} {target_field}[t]"
+        "target": f"condition at t+{horizon}: {settings['target_condition']}"
+        if target_type == "condition"
+        else f"{target_field}[t+{horizon}] {'>' if target_type == 'increase' else '/ current - 1' if target_type == 'return' else 'future level'} {target_field}[t]"
         if target_type != "level"
         else f"{target_field}[t+{horizon}]",
         "splits": {

@@ -94,3 +94,10 @@ Historical endpoint replay is bounded to an explicit 1-64 observation budget. Ac
 A language model may also suggest data-discovery terms and candidate measurements. That generated plan does not execute code or establish that a source exists, has a suitable license, or contains point-in-time history. Review the source metadata and mappings before a fetch or experiment.
 
 Run the complete synthetic example with `python examples/generic_model.py`. It deliberately constructs a relationship to verify the pipeline and is not evidence about a real dataset or trading edge.
+
+
+### Custom future conditions and own compute
+
+Set target type **My future condition** and enter a Boolean expression over your mapped measurements, for example `col("knitting_searches") > mean(col("knitting_searches"), 7)`. The target is that condition at the configured future horizon, not a new input that reveals the future. Baseline scaling/fitting use training data; validation selects the candidate and the final held-out slice evaluates it. Slow or delayed observations define future **available measurements**, not automatically the corresponding physical event date.
+
+A compatible tabular prediction service receives a bounded selected matrix in one request (up to 5,000 rows). LLM inference retains a separate call budget. The optional [compute service](compute-integration.md) can extract private/raw formats and train with user hardware/frameworks; no weights or SDKs are added to the default ZIP. Declared training times must precede inference. Pretraining claims and service-reported metrics remain declarations, so independent raw-data/forward validation is still needed.

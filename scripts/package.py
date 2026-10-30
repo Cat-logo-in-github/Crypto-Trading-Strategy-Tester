@@ -136,7 +136,10 @@ def allowed(path: PurePosixPath) -> bool:
     if first == "examples":
         return suffix in {".py", ".json", ".md", ".csv"}
     if first == "docs":
-        return suffix in {".md", ".png", ".svg"}
+        return (
+            suffix in {".md", ".png", ".svg"}
+            or path.as_posix() == "docs/public-strategy-results.json"
+        )
     if first == "site":
         return suffix in {".html", ".css", ".js", ".svg", ".png", ".md"}
     return False

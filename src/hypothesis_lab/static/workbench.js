@@ -125,7 +125,7 @@ async function runConfiguredModel(){
   if($("generic-workflow").value==="upload"){if(!wb.artifact)throw new Error("Upload and inspect a supported model, or choose a local ONNX path.");body.pretrained={...wb.artifact,feature_mapping:body.model_config.feature_mapping};if(body.pretrained.model_path){body.pretrained.model_path=$("local-model-path").value.trim();body.pretrained.allow_local_file=$("allow-model-path").checked;}body.model_config.output_name=$("onnx-output-name").value||undefined;body.model_config.output_column=Number($("onnx-output-column").value);}
   if(mode==="endpoint"){body.connection=connectionConfig();body.model_credential=$("model-key").value||undefined;}
   $("generic-progress").textContent=mode==="endpoint"?`Running at most ${body.connection.max_calls} requests to the endpoint you selected…`:"Training on the past, selecting on validation and evaluating the held-out period…";
-  const result=await api("/api/run",body);$("generic-progress").textContent="Complete. Inspect model outputs, cash, positions and fills below.";showResult(result);
+  try{const result=await api("/api/run",body);$("generic-progress").textContent="Complete. Inspect model outputs, cash, positions and fills below.";showResult(result);}catch(error){$("generic-progress").textContent="Stopped: "+error.message;throw error;}
 }
 on("run-generic-model",runConfiguredModel);
 on("export-pretrained",async()=>{const model=lastResult?.model?.model||lastResult?.ml?.model;if(!model||!["ridge","logistic","linear"].includes(model.family))throw new Error("Run a basic numeric model first. Endpoint connections and large local weights are not exported as model weights.");download("hypothesis-lab-numeric-model.json",model);});

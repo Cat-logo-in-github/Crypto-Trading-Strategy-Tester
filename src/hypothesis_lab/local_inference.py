@@ -12,7 +12,7 @@ from dataclasses import asdict, replace
 from datetime import timedelta
 from typing import Any
 
-from .data import Bar, validate_bars
+from .data import Bar, timestamp, validate_bars
 from .engine import Decision, ExecutionConfig, backtest, benchmark
 from .models import _decision_config, _diagnostics, _integer, _names, _number, prediction_decision
 
@@ -27,6 +27,7 @@ PUBLIC_CONNECTION_FIELDS = {
     "phrase",
     "output_kind",
     "max_calls",
+    "max_rows",
     "max_tokens",
     "temperature",
 }
@@ -287,7 +288,12 @@ def run_endpoint_model(
         for i in range(start, len(bars) - 1)
         if all(feature_rows[i].get(name) is not None for name in names)
     ]
-    if not indices or len(indices) > count:
+    row_budget = (
+        _integer(connection.get("max_rows", 5000), "Tabular inference row budget", 1, 5000)
+        if connection.get("kind", "llm") == "tabular"
+        else count
+    )
+    if not indices or len(indices) > row_budget:
         raise ValueError(
             "The selected evaluation needs more calls than its budget, or has no complete inputs. Choose a later start or increase the bounded budget."
         )
@@ -306,15 +312,34 @@ def run_endpoint_model(
     if (
         not isinstance(target_field, str)
         or not target_field
-        or target_type not in {"increase", "return", "level"}
+        or target_type not in {"increase", "return", "level", "condition"}
     ):
-        raise ValueError("Choose a named target field and increase, return or level target type")
-    if target_field != "market.close" and not any(target_field in row for row in feature_rows):
+        raise ValueError("Choose a target field and increase, return, level or condition type")
+    condition_values = None
+    binary_target = target_type in {"increase", "condition"}
+    if target_type == "condition":
+        from .algorithms import SignalInterpreter
+
+        condition_values = SignalInterpreter(feature_rows).run(config.get("target_condition", ""))
+        if any(value is not None and not isinstance(value, bool) for value in condition_values):
+            raise ValueError("Target condition must produce boolean outcomes")
+    if config.get("trained_through") and bars[indices[0]].timestamp + timedelta(
+        seconds=execution.bar_seconds
+    ) + timedelta(milliseconds=execution.data_delay_ms) <= timestamp(config["trained_through"]):
+        raise ValueError("Declared model training overlaps the requested inference period")
+    if (
+        target_type != "condition"
+        and target_field != "market.close"
+        and not any(target_field in row for row in feature_rows)
+    ):
         raise ValueError("The selected target field is absent from the aligned dataset")
 
     def actual_target(index: int) -> float | None:
         if index + horizon >= len(bars):
             return None
+        if condition_values is not None:
+            value = condition_values[index + horizon]
+            return float(value) if value is not None else None
         first = (
             bars[index].close
             if target_field == "market.close"
@@ -411,7 +436,7 @@ def run_endpoint_model(
         actual = actual_target(i)
         forecast_correct = (
             ((response["value"] > 0.5) == bool(actual))
-            if actual is not None and kind == "probability" and target_type == "increase"
+            if actual is not None and kind == "probability" and binary_target
             else None
         )
         records.append(
@@ -428,7 +453,8 @@ def run_endpoint_model(
                 if i + horizon < len(bars)
                 else None,
                 "target_label_available_at": (
-                    bars[i + horizon].timestamp + timedelta(seconds=execution.bar_seconds)
+                    bars[i + horizon].timestamp
+                    + timedelta(seconds=execution.bar_seconds + execution.data_delay_ms / 1000)
                 ).isoformat()
                 if i + horizon < len(bars)
                 else None,
@@ -461,20 +487,20 @@ def run_endpoint_model(
         ]
         record["execution_status"] = orders.get(record["index"] - start, {}).get("status", "hold")
     labeled = [record for record in records if record["actual"] is not None]
-    diagnostic_kind = (
-        "probability" if kind == "probability" and target_type == "increase" else "prediction"
-    )
+    diagnostic_kind = "probability" if kind == "probability" and binary_target else "prediction"
     diagnostics = _diagnostics(
         [record["actual"] for record in labeled],
         [record["prediction"] for record in labeled],
         diagnostic_kind,
     )
-    if target_type == "increase" and diagnostic_kind != "probability":
+    if binary_target and diagnostic_kind != "probability":
         diagnostics.pop("directional_accuracy", None)
     public_config_fields = {
         "feature_names",
         "target_field",
         "target_type",
+        "target_condition",
+        "trained_through",
         "horizon",
         "decision",
         "evaluation_start_index",
@@ -495,7 +521,9 @@ def run_endpoint_model(
             "target_type": target_type,
             "horizon": horizon,
         },
-        "target": f"{target_field}[t+{horizon}] compared with current {target_type}",
+        "target": f"condition at t+{horizon}: {config['target_condition']}"
+        if target_type == "condition"
+        else f"{target_field}[t+{horizon}] compared with current {target_type}",
         "test": diagnostics,
         "validation": {"rows": 0, "mse": None, "mae": None, "directional_accuracy": None},
         "predictions": records,
